@@ -70,7 +70,10 @@ impl RawStringVec {
 
     pub fn into_null_terminated_ptr(mut self) -> *const *mut c_char {
         assert!(self.0.last().unwrap().is_null());
-        std::mem::take(&mut self.0).into_raw_parts().0
+        let mut vec = std::mem::take(&mut self.0);
+        let ptr = vec.as_mut_ptr();
+        std::mem::forget(vec);
+        ptr
     }
 
     #[cfg(target_os = "macos")]

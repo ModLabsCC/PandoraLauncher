@@ -10,7 +10,7 @@ use gpui_component::{
 use schema::{content::{ContentInstallReason, ContentSource}, curseforge::CurseforgeClassId, loader::Loader, modrinth::ModrinthProjectType};
 use ustr::Ustr;
 
-use crate::{component::{content_list::ContentListDelegate, named_dropdown::{NamedDropdown, NamedDropdownItem}}, entity::instance::{ContentStates, InstanceEntry}, interface_config::{InstanceContentSortKey, InterfaceConfig}, root, ui::PageType};
+use crate::{component::{content_list::ContentListDelegate, named_dropdown::{NamedDropdown, NamedDropdownItem}}, entity::instance::{ContentStates, InstanceEntry}, icon::PandoraIcon, interface_config::{InstanceContentSortKey, InterfaceConfig}, root, ui::PageType};
 
 pub struct InstanceContentSubpage {
     content_type: ContentType,
@@ -343,8 +343,33 @@ impl Render for InstanceContentSubpage {
             .top(px(4.0))
             .right(px(12.0));
 
+        let unsigned_mod_count = match self.content_type {
+            ContentType::Mods => self.content.read(cx).iter()
+                .filter(|summary| summary.content_summary.show_mcregistry_unsigned_badge())
+                .count(),
+            _ => 0,
+        };
+
         v_flex().p_4().size_full()
             .child(header)
+            .when(unsigned_mod_count > 0, |this| {
+                this.child(
+                    h_flex()
+                        .gap_2()
+                        .mb_2()
+                        .px_3()
+                        .py_2()
+                        .rounded(theme.radius)
+                        .border_1()
+                        .border_color(theme.warning)
+                        .bg(theme.warning.opacity(0.08))
+                        .text_color(theme.warning_foreground)
+                        .text_sm()
+                        .items_center()
+                        .child(PandoraIcon::TriangleAlert)
+                        .child(t::instance::content::mcregistry::unsigned_count(unsigned_mod_count)),
+                )
+            })
             .child(div()
                 .id("content-list-area")
                 .relative()

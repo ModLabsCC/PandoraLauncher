@@ -1107,6 +1107,18 @@ hu = "Oldal megnyitása"
 en = "by ${name: &str}"
 de = "von ${name: &str}"
 hu = "tőle: ${name: &str}"
+[instance.content.mcregistry.notarized]
+en = "Notarized by MCRegistry"
+de = "Von MCRegistry notarisiert"
+hu = "MCRegistry által hitelesítve"
+[instance.content.mcregistry.not_notarized]
+en = "Not notarized by MCRegistry"
+de = "Nicht von MCRegistry notarisiert"
+hu = "Nem hitelesített az MCRegistry által"
+[instance.content.mcregistry.unsigned_count]
+en = "${count: usize} mod(s) are not notarized by MCRegistry"
+de = "${count: usize} Mod(s) sind nicht von MCRegistry notarisiert"
+hu = "${count: usize} mod nem hitelesített az MCRegistry által"
 [instance.content.no_description]
 en = "No Description"
 de = "Keine Beschreibung"

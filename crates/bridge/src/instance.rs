@@ -122,6 +122,21 @@ impl ContentSummary {
     pub fn is_unknown(summary: &Arc<Self>) -> bool {
         Arc::ptr_eq(summary, &*UNKNOWN_CONTENT_SUMMARY)
     }
+
+    pub fn is_mcregistry_verifiable_mod(&self) -> bool {
+        matches!(
+            self.extra,
+            ContentType::Fabric | ContentType::Forge | ContentType::LegacyForge | ContentType::NeoForge | ContentType::JavaModule
+        )
+    }
+
+    pub fn show_mcregistry_notarized_badge(&self) -> bool {
+        self.mcregistry_notarized && self.is_mcregistry_verifiable_mod()
+    }
+
+    pub fn show_mcregistry_unsigned_badge(&self) -> bool {
+        !self.mcregistry_notarized && self.is_mcregistry_verifiable_mod()
+    }
 }
 
 pub static UNKNOWN_CONTENT_SUMMARY: Lazy<Arc<ContentSummary>> = Lazy::new(|| {

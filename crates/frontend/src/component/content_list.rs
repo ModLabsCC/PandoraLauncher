@@ -312,11 +312,16 @@ impl ContentListDelegate {
             .border_1()
             .when(selected, |content| content.border_color(cx.theme().selection).bg(cx.theme().selection.alpha(0.2)));
 
-        if let Some(update_button) = update_button {
-            item_content = item_content.child(h_flex().absolute().right_4().gap_2().child(update_button).child(delete_button))
-        } else {
-            item_content = item_content.child(delete_button.absolute().right_4())
+        let notarized_badge = render_mcregistry_badge(element_id, &summary.content_summary);
+
+        let mut action_buttons = h_flex().absolute().right_4().gap_2();
+        if let Some(notarized_badge) = notarized_badge {
+            action_buttons = action_buttons.child(notarized_badge);
         }
+        if let Some(update_button) = update_button {
+            action_buttons = action_buttons.child(update_button);
+        }
+        item_content = item_content.child(action_buttons.child(delete_button));
 
         ListItem::new(("item", element_id)).p_1().child(item_content).on_click(cx.listener(move |this, click: &ClickEvent, _, cx| {
             cx.stop_propagation();
@@ -455,6 +460,10 @@ impl ContentListDelegate {
             .child(icon.size_16().min_w_16().min_h_16().grayscale(!visually_enabled))
             .child(desc1.when(!visually_enabled, |this| this.line_through()))
             .when_some(desc2, |div, desc2| div.child(desc2.when(!visually_enabled, |this| this.line_through())));
+
+        if let Some(badge) = render_mcregistry_badge(element_id, summary) {
+            item_content = item_content.child(badge);
+        }
 
         if child.disabled_third_party_downloads {
             item_content = item_content.child(ErrorAlert::new("Blocked".into(), "The mod author has blocked downloads from third-party launchers".into()).w(Length::Auto));
@@ -785,6 +794,34 @@ impl ListDelegate for ContentListDelegate {
     fn perform_search(&mut self, query: &str, _window: &mut Window, _cx: &mut Context<ListState<Self>>) -> Task<()> {
         self.actual_perform_search(query);
         Task::ready(())
+    }
+}
+
+fn render_mcregistry_badge(element_id: u64, summary: &ContentSummary) -> Option<AnyElement> {
+    if summary.show_mcregistry_notarized_badge() {
+        Some(
+            Button::new(("mcregistry-notarized", element_id))
+                .compact()
+                .small()
+                .success()
+                .icon(PandoraIcon::CircleCheck)
+                .tooltip(t::instance::content::mcregistry::notarized())
+                .disabled(true)
+                .into_any_element(),
+        )
+    } else if summary.show_mcregistry_unsigned_badge() {
+        Some(
+            Button::new(("mcregistry-unsigned", element_id))
+                .compact()
+                .small()
+                .warning()
+                .icon(PandoraIcon::TriangleAlert)
+                .tooltip(t::instance::content::mcregistry::not_notarized())
+                .disabled(true)
+                .into_any_element(),
+        )
+    } else {
+        None
     }
 }
 

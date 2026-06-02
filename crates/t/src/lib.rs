@@ -857,6 +857,36 @@ pub mod instance {
                 }
             }
         }
+        pub mod mcregistry {
+            pub fn get(key: &str) -> Option<&'static str> {
+                match key {
+                    "not_notarized" => Some(not_notarized()),
+                    "notarized" => Some(notarized()),
+                    _ => None,
+                }
+            }
+            pub fn not_notarized() -> &'static str {
+                match crate::LANG.load(std::sync::atomic::Ordering::Relaxed) {
+                    1 => "Nicht von MCRegistry notarisiert",
+                    2 => "Nem hitelesített az MCRegistry által",
+                    _ => "Not notarized by MCRegistry",
+                }
+            }
+            pub fn notarized() -> &'static str {
+                match crate::LANG.load(std::sync::atomic::Ordering::Relaxed) {
+                    1 => "Von MCRegistry notarisiert",
+                    2 => "MCRegistry által hitelesítve",
+                    _ => "Notarized by MCRegistry",
+                }
+            }
+            pub fn unsigned_count(count: usize) -> String {
+                match crate::LANG.load(std::sync::atomic::Ordering::Relaxed) {
+                    1 => format!("{count} Mod(s) sind nicht von MCRegistry notarisiert"),
+                    2 => format!("{count} mod nem hitelesített az MCRegistry által"),
+                    _ => format!("{count} mod(s) are not notarized by MCRegistry"),
+                }
+            }
+        }
         pub fn modpacks() -> &'static str {
             match crate::LANG.load(std::sync::atomic::Ordering::Relaxed) {
                 1 => "Modpakete",

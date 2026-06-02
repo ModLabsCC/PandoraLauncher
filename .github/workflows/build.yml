@@ -52,3 +52,57 @@ jobs:
 
       - name: Run build command
         run: cargo build --release --frozen --target ${{ matrix.platform.target }}
+
+      - name: Prepare artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.platform.target }}/release/pandora_launcher${{ matrix.platform.binext }}" "dist/${{ matrix.platform.artifact_name }}"
+          if [[ "${{ matrix.platform.binext }}" == "" ]]; then
+            strip "dist/${{ matrix.platform.artifact_name }}"
+          fi
+
+      - name: Upload artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.platform.os_name }}
+          path: dist/*
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          merge-multiple: true
+
+      - name: Update latest release
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          mapfile -t files < <(find artifacts -type f)
+          if ((${#files[@]} == 0)); then
+            echo "No artifacts found"
+            exit 1
+          fi
+
+          notes="Latest CI build from commit [${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})"
+
+          if gh release view latest >/dev/null 2>&1; then
+            gh release edit latest --target "${{ github.sha }}" --notes "$notes"
+            gh release upload latest "${files[@]}" --clobber
+          else
+            gh release create latest "${files[@]}" \
+              --title "Latest" \
+              --notes "$notes" \
+              --target "${{ github.sha }}"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

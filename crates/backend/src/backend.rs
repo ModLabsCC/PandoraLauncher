@@ -24,7 +24,7 @@ use ustr::Ustr;
 use uuid::Uuid;
 
 use crate::{
-    account::{BackendAccountInfo, MinecraftLoginInfo}, directories::LauncherDirectories, id_slab::IdSlab, instance::Instance, launch::Launcher, metadata::{items::{CurseforgeGetFilesMetadataItem, MinecraftVersionManifestMetadataItem}, manager::MetadataManager}, mod_metadata::ModMetadataManager, persistent::Persistent, server_list_pinger::ServerListPinger, skin_manager::SkinManager
+    account::{BackendAccountInfo, MinecraftLoginInfo}, directories::LauncherDirectories, id_slab::IdSlab, instance::Instance, launch::Launcher, mcregistry::McRegistryVerifier, metadata::{items::{CurseforgeGetFilesMetadataItem, MinecraftVersionManifestMetadataItem}, manager::MetadataManager}, mod_metadata::ModMetadataManager, persistent::Persistent, server_list_pinger::ServerListPinger, skin_manager::SkinManager
 };
 
 fn build_http_clients(user_agent: &str, proxy_config: &ProxyConfig, proxy_password: Option<&str>) -> (reqwest::Client, reqwest::Client) {
@@ -123,6 +123,8 @@ pub fn start(runtime: tokio::runtime::Runtime, launcher_dir: PathBuf, send: Fron
     // Load accounts
     let account_info = Persistent::load(directories.accounts_json.clone());
 
+    let mcregistry = Arc::new(McRegistryVerifier::new(http_client.clone()));
+
     let state = BackendState {
         self_handle,
         send: send.clone(),
@@ -144,6 +146,7 @@ pub fn start(runtime: tokio::runtime::Runtime, launcher_dir: PathBuf, send: Fron
         quit_coordinator: quit_handler,
         should_quit: AtomicBool::new(false),
         content_install_semaphore: Semaphore::new(8),
+        mcregistry,
     };
 
     log::debug!("Doing initial backend load");
@@ -205,6 +208,7 @@ pub struct BackendState {
     pub quit_coordinator: QuitCoordinator,
     pub should_quit: AtomicBool,
     pub content_install_semaphore: Semaphore,
+    pub mcregistry: Arc<McRegistryVerifier>,
 }
 
 pub struct CachedMinecraftProfile {
@@ -794,6 +798,30 @@ impl BackendState {
         }
 
         self.prelaunch_collect_mods_and_apply_modpack(loader, minecraft_version, &mods, &dot_minecraft_dir, &mods_dir, &mut mod_copies, modal_action).await;
+
+        let mcregistry_config = self.config.write().get().mcregistry.clone();
+        if mcregistry_config.enabled {
+            let content_library_dir = self.directories.content_library_dir.clone();
+            let mut verification_entries = Vec::new();
+            for mod_copy in &mod_copies {
+                let source = match &mod_copy.source {
+                    PrelaunchModCopySource::FromContentLibrary { hash } => {
+                        let extension = mod_copy.path.extension().and_then(OsStr::to_str);
+                        let path = crate::create_content_library_path(&content_library_dir, *hash, extension);
+                        crate::mcregistry::PrelaunchSource::Path(path)
+                    },
+                    PrelaunchModCopySource::FromBytes { bytes } => {
+                        crate::mcregistry::PrelaunchSource::Bytes(Arc::clone(bytes))
+                    },
+                };
+                verification_entries.push((mod_copy.path.clone(), source));
+            }
+
+            if let Err(error) = self.mcregistry.verify_mod_copies(&verification_entries, &mcregistry_config).await {
+                modal_action.set_error_message(format!("MCRegistry verification failed: {error}").into());
+                return Ok(());
+            }
+        }
 
         let sandbox = if let Some(instance) = self.instance_state.write().instances.get_mut(id) {
             instance.set_frozen_mods_folder(true);

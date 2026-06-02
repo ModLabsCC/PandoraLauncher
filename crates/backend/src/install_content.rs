@@ -12,7 +12,7 @@ use sha1::{Digest, Sha1};
 use strum::IntoEnumIterator;
 use ustr::Ustr;
 
-use crate::{BackendState, instance::Instance, lockfile::Lockfile, metadata::{items::{CurseforgeGetFilesMetadataItem, CurseforgeGetModFilesMetadataItem, ModrinthProjectVersionsMetadataItem, ModrinthVersionMetadataItem}, manager::MetaLoadError}};
+use crate::{BackendState, instance::Instance, lockfile::Lockfile, mcregistry::{McRegistryError, McRegistryVerifier}, metadata::{items::{CurseforgeGetFilesMetadataItem, CurseforgeGetModFilesMetadataItem, ModrinthProjectVersionsMetadataItem, ModrinthVersionMetadataItem}, manager::MetaLoadError}};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ContentInstallError {
@@ -46,6 +46,8 @@ pub enum ContentInstallError {
     ContentAlreadyInstalled,
     #[error("The mod author has blocked downloads from third-party launchers")]
     NoThirdPartyDownloads,
+    #[error("MCRegistry verification failed: {0}")]
+    McRegistry(#[from] McRegistryError),
 }
 
 struct InstallFromContentLibrary {
@@ -785,6 +787,8 @@ impl BackendState {
                 tracker.set_count(3);
                 tracker.notify();
 
+                self.verify_downloaded_mod(&path, &mod_summary).await?;
+
                 let install_path = match &content_file.path {
                     ContentInstallPath::Raw(path) => Some(path.clone()),
                     ContentInstallPath::Safe(safe_path) => Some(safe_path.to_path(Path::new("")).into()),
@@ -1010,6 +1014,7 @@ impl BackendState {
             tracker.set_finished(ProgressTrackerFinishType::Normal);
             tracker.notify();
             let summary = self.mod_metadata_manager.get_path(&path);
+            self.verify_downloaded_mod(&path, &summary).await?;
             return Ok((path, sha1, summary));
         }
 
@@ -1066,7 +1071,31 @@ impl BackendState {
         drop(lockfile);
 
         let summary = self.mod_metadata_manager.get_path(&path);
+        self.verify_downloaded_mod(&path, &summary).await?;
         Ok((path, sha1, summary))
+    }
+
+    async fn verify_downloaded_mod(
+        &self,
+        path: &Path,
+        summary: &Arc<ContentSummary>,
+    ) -> Result<(), ContentInstallError> {
+        if !McRegistryVerifier::should_verify_content(&summary.extra, path, false) {
+            return Ok(());
+        }
+
+        let config = self.config.write().get().mcregistry.clone();
+        let context = summary
+            .name
+            .as_deref()
+            .or_else(|| path.file_name().and_then(|name| name.to_str()))
+            .unwrap_or("mod");
+        let outcome = self.mcregistry.verify_jar_path(path, &config).await;
+        if let Err(error) = McRegistryVerifier::apply_policy(outcome, &config, context) {
+            let _ = std::fs::remove_file(path);
+            return Err(error.into());
+        }
+        Ok(())
     }
 }
 

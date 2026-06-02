@@ -24,6 +24,7 @@ mod launch;
 mod launch_wrapper;
 mod launcher_import;
 mod lockfile;
+mod mcregistry;
 mod log_reader;
 mod metadata;
 mod mod_metadata;

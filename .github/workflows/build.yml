@@ -17,14 +17,17 @@ jobs:
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binext: ""
+            artifact_name: PandoraLauncher-Linux-x86_64-Portable
           - os_name: Windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             binext: .exe
+            artifact_name: PandoraLauncher-Windows-x86_64-Portable.exe
           - os_name: MacOS-arm64
             os: macos-latest
             target: aarch64-apple-darwin
             binext: ""
+            artifact_name: PandoraLauncher-macOS-arm64
 
     runs-on: ${{ matrix.platform.os }}
     steps:

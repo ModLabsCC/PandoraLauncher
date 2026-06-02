@@ -1427,6 +1427,11 @@ impl BackendState {
                 // Notify user that restart is required for proxy changes to take effect
                 self.send.send_info("Proxy settings saved. Restart the launcher to apply changes.");
             },
+            MessageToBackend::SetMcRegistryConfiguration { config } => {
+                self.config.write().modify(|backend_config| {
+                    backend_config.mcregistry = config;
+                });
+            },
             MessageToBackend::CreateInstanceShortcut { id, path } => {
                 if let Some(instance) = self.instance_state.write().instances.get_mut(id) {
                     let Ok(current_exe) = std::env::current_exe() else {

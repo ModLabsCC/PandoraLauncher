@@ -3,7 +3,7 @@ use std::{
 };
 
 use schema::{
-    backend_config::{BackendConfig, ProxyConfig}, instance::{
+    backend_config::{BackendConfig, McRegistryConfig, ProxyConfig}, instance::{
         InstanceConfiguration, InstanceJvmBinaryConfiguration, InstanceJvmFlagsConfiguration,
         InstanceLinuxWrapperConfiguration, InstanceMemoryConfiguration, InstanceSystemLibrariesConfiguration, InstanceWrapperCommandConfiguration,
     }, loader::Loader, minecraft_profile::{MinecraftProfileCape, SkinVariant}, pandora_update::UpdatePrompt, unique_bytes::UniqueBytes
@@ -255,6 +255,9 @@ pub enum MessageToBackend {
     SetProxyConfiguration {
         config: ProxyConfig,
         password: Option<String>,
+    },
+    SetMcRegistryConfiguration {
+        config: McRegistryConfig,
     },
     CreateInstanceShortcut {
         id: InstanceID,

@@ -9,7 +9,7 @@ use parking_lot::{RwLock, RwLockReadGuard};
 use rayon::iter::{IntoParallelRefIterator, ParallelExtend, ParallelIterator};
 use rc_zip_sync::EntryHandle;
 use rustc_hash::{FxHashMap, FxHashSet};
-use schema::{content::ContentSource, curseforge::{CachedCurseforgeFileInfo, CurseforgeFile, CurseforgeModpackManifestJson}, fabric_mod::{FabricModJson, Icon, Person}, forge_mod::{JarJarMetadata, McModInfo, ModsToml}, loader::Loader, modrinth::{ModrinthFile, ModrinthSideRequirement}, mrpack::ModrinthIndexJson, resourcepack::PackMcmeta, unique_bytes::UniqueBytes};
+use schema::{content::ContentSource, curseforge::{CachedCurseforgeFileInfo, CurseforgeFile, CurseforgeModpackManifestJson}, fabric_mod::{FabricModJson, Icon, Person}, forge_mod::{JarJarMetadata, McModInfo, ModsToml}, loader::Loader, mcregistry::MCREGISTRY_TICKET_ZIP_PATH, modrinth::{ModrinthFile, ModrinthSideRequirement}, mrpack::ModrinthIndexJson, resourcepack::PackMcmeta, unique_bytes::UniqueBytes};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DeserializeAs};
 use sha1::{Digest, Sha1};
@@ -331,10 +331,15 @@ impl ModMetadataManager {
         let can_be_zip = extension.is_none() || extension == Some(OsStr::new("zip"));
         let mut candidates = Vec::new();
         let mut has_shaders_folder = false;
+        let mut has_mcregistry_ticket = false;
 
         for entry in archive.entries() {
             if entry.kind() != rc_zip_sync::rc_zip::EntryKind::File {
                 continue;
+            }
+
+            if entry.name == MCREGISTRY_TICKET_ZIP_PATH {
+                has_mcregistry_ticket = true;
             }
 
             let Some(zip_metadata_file) = ZipMetadataFile::by_path(&entry.name) else {
@@ -375,7 +380,7 @@ impl ModMetadataManager {
             };
 
             if let Some(summary) = summary {
-                return summary;
+                return Self::with_mcregistry_notarized(summary, has_mcregistry_ticket);
             }
         }
 
@@ -389,11 +394,22 @@ impl ModMetadataManager {
                 version_str: "".into(),
                 rich_description: None,
                 png_icon: None,
-                extra: ContentType::ShaderPack
+                extra: ContentType::ShaderPack,
+                mcregistry_notarized: has_mcregistry_ticket,
             });
         }
 
-        UNKNOWN_CONTENT_SUMMARY.clone()
+        Self::with_mcregistry_notarized(UNKNOWN_CONTENT_SUMMARY.clone(), has_mcregistry_ticket)
+    }
+
+    fn with_mcregistry_notarized(summary: Arc<ContentSummary>, notarized: bool) -> Arc<ContentSummary> {
+        if !notarized {
+            return summary;
+        }
+
+        let mut updated = (*summary).clone();
+        updated.mcregistry_notarized = true;
+        Arc::new(updated)
     }
 
     fn load_fabric_mod<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], filesize: Option<u64>, archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ContentSummary>> {
@@ -445,7 +461,8 @@ impl ModMetadataManager {
             version_str: create_version_string(&fabric_mod_json.version),
             rich_description: None,
             png_icon,
-            extra: ContentType::Fabric
+            extra: ContentType::Fabric,
+            mcregistry_notarized: false,
         }))
     }
 
@@ -499,6 +516,7 @@ impl ModMetadataManager {
             rich_description: None,
             png_icon,
             extra,
+            mcregistry_notarized: false,
         }))
     }
 
@@ -550,6 +568,7 @@ impl ModMetadataManager {
             rich_description: None,
             png_icon,
             extra: ContentType::LegacyForge,
+            mcregistry_notarized: false,
         }))
     }
 
@@ -693,7 +712,8 @@ impl ModMetadataManager {
             extra: ContentType::ModrinthModpack {
                 files: modpack_files.into(),
                 dependencies: modrinth_index_json.dependencies,
-            }
+            },
+            mcregistry_notarized: false,
         }))
     }
 
@@ -837,7 +857,8 @@ impl ModMetadataManager {
                 unknown_files: unknown_files.into(),
                 files: modpack_files.into(),
                 minecraft: manifest_json.minecraft,
-            }
+            },
+            mcregistry_notarized: false,
         }))
     }
 
@@ -910,7 +931,8 @@ impl ModMetadataManager {
             version_str: version.unwrap_or_default(),
             rich_description: None,
             png_icon: None,
-            extra: ContentType::JavaModule
+            extra: ContentType::JavaModule,
+            mcregistry_notarized: false,
         }))
     }
 
@@ -937,7 +959,8 @@ impl ModMetadataManager {
             version_str: "".into(),
             rich_description: Some(Arc::new(pack_mcmeta.pack.description)),
             png_icon,
-            extra: ContentType::ResourcePack
+            extra: ContentType::ResourcePack,
+            mcregistry_notarized: false,
         }))
     }
 
@@ -958,7 +981,8 @@ impl ModMetadataManager {
             version_str: "".into(),
             rich_description: Some(Arc::new(pack_mcmeta.pack.description)),
             png_icon,
-            extra: ContentType::ResourcePack
+            extra: ContentType::ResourcePack,
+            mcregistry_notarized: false,
         }))
     }
 }

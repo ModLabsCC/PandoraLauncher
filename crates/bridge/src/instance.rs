@@ -97,6 +97,8 @@ pub struct ContentSummary {
     pub authors: Arc<str>,
     pub png_icon: Option<UniqueBytes>,
     pub extra: ContentType,
+    /// True when `META-INF/MC-REGISTRY.ticket` is present in the mod JAR.
+    pub mcregistry_notarized: bool,
 }
 
 #[derive(enum_map::Enum, Debug, strum::EnumIter, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -133,6 +135,7 @@ pub static UNKNOWN_CONTENT_SUMMARY: Lazy<Arc<ContentSummary>> = Lazy::new(|| {
         rich_description: None,
         png_icon: None,
         extra: ContentType::Unknown,
+        mcregistry_notarized: false,
     })
 });
 

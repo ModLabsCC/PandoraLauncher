@@ -1593,6 +1593,23 @@ en = "Note - Proxy settings only apply to the launcher, not the game itself"
 de = "Achtung - Proxyeinstellungen sind nur für Pandora, nicht für Minecraft"
 hu = "Megjegyzés - A proxy beállítások csak az indítóra hatnak, nem a játékra"
 
+[settings.mcregistry.title]
+en = "MCRegistry"
+de = "MCRegistry"
+hu = "MCRegistry"
+[settings.mcregistry.enabled]
+en = "Enable MCRegistry mod verification"
+de = "MCRegistry Mod-Verifizierung aktivieren"
+hu = "MCRegistry mod ellenőrzés engedélyezése"
+[settings.mcregistry.enforce]
+en = "Block mods without a valid MCRegistry ticket"
+de = "Nicht notarisierte Mods blockieren"
+hu = "Nem hitelesített modok blokkolása"
+[settings.mcregistry.fail_closed]
+en = "Block when MCRegistry is unavailable"
+de = "Start blockieren, wenn MCRegistry nicht erreichbar ist"
+hu = "Indítás blokkolása, ha az MCRegistry nem elérhető"
+
 [skins.title]
 en = "Skins"
 de = "Skins"

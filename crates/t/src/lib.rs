@@ -3179,6 +3179,45 @@ pub mod settings {
             _ => "Interface",
         }
     }
+    pub mod mcregistry {
+        pub fn get(key: &str) -> Option<&'static str> {
+            match key {
+                "enabled" => Some(enabled()),
+                "enforce" => Some(enforce()),
+                "fail_closed" => Some(fail_closed()),
+                "title" => Some(title()),
+                _ => None,
+            }
+        }
+        pub fn enabled() -> &'static str {
+            match crate::LANG.load(std::sync::atomic::Ordering::Relaxed) {
+                1 => "MCRegistry Mod-Verifizierung aktivieren",
+                2 => "MCRegistry mod ellenőrzés engedélyezése",
+                _ => "Enable MCRegistry mod verification",
+            }
+        }
+        pub fn enforce() -> &'static str {
+            match crate::LANG.load(std::sync::atomic::Ordering::Relaxed) {
+                1 => "Nicht notarisierte Mods blockieren",
+                2 => "Nem hitelesített modok blokkolása",
+                _ => "Block mods without a valid MCRegistry ticket",
+            }
+        }
+        pub fn fail_closed() -> &'static str {
+            match crate::LANG.load(std::sync::atomic::Ordering::Relaxed) {
+                1 => "Start blockieren, wenn MCRegistry nicht erreichbar ist",
+                2 => "Indítás blokkolása, ha az MCRegistry nem elérhető",
+                _ => "Block when MCRegistry is unavailable",
+            }
+        }
+        pub fn title() -> &'static str {
+            match crate::LANG.load(std::sync::atomic::Ordering::Relaxed) {
+                1 => "MCRegistry",
+                2 => "MCRegistry",
+                _ => "MCRegistry",
+            }
+        }
+    }
     pub fn network() -> &'static str {
         match crate::LANG.load(std::sync::atomic::Ordering::Relaxed) {
             1 => "Netzwerk",

@@ -13,7 +13,7 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex, ActiveTheme, Disableable, Sizable, ThemeRegistry,
 };
-use schema::backend_config::{BackendConfig, ProxyConfig, ProxyProtocol};
+use schema::backend_config::{BackendConfig, McRegistryConfig, McRegistryPolicy, ProxyConfig, ProxyProtocol};
 
 use crate::{entity::DataEntities, icon::PandoraIcon, interface_config::InterfaceConfig};
 
@@ -41,6 +41,9 @@ struct Settings {
     proxy_username_input: Entity<InputState>,
     proxy_password_input: Entity<InputState>,
     proxy_password_changed: bool,
+    mcregistry_enabled: bool,
+    mcregistry_enforce: bool,
+    mcregistry_fail_closed: bool,
 }
 
 pub fn build_settings_sheet(data: &DataEntities, window: &mut Window, cx: &mut App) -> impl Fn(Sheet, &mut Window, &mut App) -> Sheet + 'static {
@@ -101,6 +104,9 @@ pub fn build_settings_sheet(data: &DataEntities, window: &mut Window, cx: &mut A
             proxy_username_input,
             proxy_password_input,
             proxy_password_changed: false,
+            mcregistry_enabled: true,
+            mcregistry_enforce: false,
+            mcregistry_fail_closed: true,
         };
 
         cx.subscribe(&settings.proxy_protocol_select, Settings::on_proxy_protocol_changed).detach();
@@ -173,6 +179,10 @@ impl Settings {
                         input.set_value(password, window, cx);
                     });
                 }
+
+                settings.mcregistry_enabled = result.config.mcregistry.enabled;
+                settings.mcregistry_enforce = result.config.mcregistry.policy == McRegistryPolicy::Enforce;
+                settings.mcregistry_fail_closed = result.config.mcregistry.fail_closed;
 
                 settings.backend_config = Some(result.config);
                 settings.get_configuration_task = None;
@@ -267,6 +277,30 @@ impl Settings {
         });
 
         self.proxy_password_changed = false;
+    }
+
+    fn save_mcregistry_config(&mut self, cx: &mut Context<Self>) {
+        let config = McRegistryConfig {
+            enabled: self.mcregistry_enabled,
+            base_url: self
+                .backend_config
+                .as_ref()
+                .map(|config| config.mcregistry.base_url.clone())
+                .unwrap_or_else(|| schema::mcregistry::MCREGISTRY_DEFAULT_BASE_URL.to_string()),
+            policy: if self.mcregistry_enforce {
+                McRegistryPolicy::Enforce
+            } else {
+                McRegistryPolicy::Warn
+            },
+            fail_closed: self.mcregistry_fail_closed,
+        };
+
+        if let Some(backend_config) = &mut self.backend_config {
+            backend_config.mcregistry = config.clone();
+        }
+
+        self.backend_handle.send(MessageToBackend::SetMcRegistryConfiguration { config });
+        cx.notify();
     }
 
     fn render_interface_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -433,6 +467,33 @@ impl Settings {
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
                 .child(t::settings::proxy::launcher_only_note()))
+            .child(crate::labelled(
+                t::settings::mcregistry::title(),
+                v_flex().gap_2()
+                    .child(Checkbox::new("mcregistry-enabled")
+                        .label(t::settings::mcregistry::enabled())
+                        .checked(self.mcregistry_enabled)
+                        .on_click(cx.listener(|settings, value, _, cx| {
+                            settings.mcregistry_enabled = *value;
+                            settings.save_mcregistry_config(cx);
+                        })))
+                    .child(Checkbox::new("mcregistry-enforce")
+                        .label(t::settings::mcregistry::enforce())
+                        .disabled(!self.mcregistry_enabled)
+                        .checked(self.mcregistry_enforce)
+                        .on_click(cx.listener(|settings, value, _, cx| {
+                            settings.mcregistry_enforce = *value;
+                            settings.save_mcregistry_config(cx);
+                        })))
+                    .child(Checkbox::new("mcregistry-fail-closed")
+                        .label(t::settings::mcregistry::fail_closed())
+                        .disabled(!self.mcregistry_enabled)
+                        .checked(self.mcregistry_fail_closed)
+                        .on_click(cx.listener(|settings, value, _, cx| {
+                            settings.mcregistry_fail_closed = *value;
+                            settings.save_mcregistry_config(cx);
+                        })))
+            ))
     }
 }
 impl Render for Settings {

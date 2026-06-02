@@ -3,6 +3,8 @@ use std::{collections::BTreeSet, sync::Arc};
 use enumset::{EnumSet, EnumSetType};
 use serde::{Deserialize, Serialize};
 
+use crate::mcregistry::MCREGISTRY_DEFAULT_BASE_URL;
+
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct BackendConfig {
     #[serde(default, skip_serializing_if = "is_default_sync_targets", deserialize_with = "try_deserialize_sync_targets")]
@@ -11,6 +13,61 @@ pub struct BackendConfig {
     pub dont_open_game_output_when_launching: bool,
     #[serde(default, skip_serializing_if = "crate::skip_if_default", deserialize_with = "crate::try_deserialize")]
     pub proxy: ProxyConfig,
+    #[serde(default, skip_serializing_if = "is_default_mcregistry_config", deserialize_with = "try_deserialize_mcregistry_config")]
+    pub mcregistry: McRegistryConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct McRegistryConfig {
+    #[serde(default = "default_mcregistry_enabled", skip_serializing_if = "crate::skip_if_default", deserialize_with = "crate::try_deserialize")]
+    pub enabled: bool,
+    #[serde(default = "default_mcregistry_base_url", skip_serializing_if = "is_default_mcregistry_base_url")]
+    pub base_url: String,
+    #[serde(default, skip_serializing_if = "crate::skip_if_default", deserialize_with = "crate::try_deserialize")]
+    pub policy: McRegistryPolicy,
+    #[serde(default = "crate::default_true", skip_serializing_if = "crate::skip_if_default", deserialize_with = "crate::try_deserialize")]
+    pub fail_closed: bool,
+}
+
+impl Default for McRegistryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_mcregistry_enabled(),
+            base_url: default_mcregistry_base_url(),
+            policy: McRegistryPolicy::default(),
+            fail_closed: true,
+        }
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum McRegistryPolicy {
+    #[default]
+    Warn,
+    Enforce,
+}
+
+fn default_mcregistry_enabled() -> bool {
+    true
+}
+
+fn default_mcregistry_base_url() -> String {
+    MCREGISTRY_DEFAULT_BASE_URL.to_string()
+}
+
+fn is_default_mcregistry_base_url(url: &str) -> bool {
+    url == MCREGISTRY_DEFAULT_BASE_URL
+}
+
+fn is_default_mcregistry_config(config: &McRegistryConfig) -> bool {
+    config == &McRegistryConfig::default()
+}
+
+fn try_deserialize_mcregistry_config<'de, D>(deserializer: D) -> Result<McRegistryConfig, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(McRegistryConfig::deserialize(deserializer).unwrap_or_default())
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq)]

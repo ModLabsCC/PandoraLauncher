@@ -15,6 +15,7 @@ pub mod java_runtime_component;
 pub mod java_runtimes;
 pub mod loader;
 pub mod maven;
+pub mod mcregistry;
 pub mod minecraft_profile;
 pub mod modification;
 pub mod modrinth;

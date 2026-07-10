@@ -273,6 +273,7 @@ impl ContentType {
     pub fn is_strict_minecraft_version(&self) -> bool {
         match self {
             Self::ResourcePack => false,
+            Self::ShaderPack => false,
             _ => true,
         }
     }

@@ -27,14 +27,13 @@ use schema::{
 };
 use sha1::{Digest as Sha1Digest, Sha1};
 use sha2::Sha512;
+use ustr::Ustr;
 use walkdir::WalkDir;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 use crate::{
-    BackendState,
-    metadata::{
-        items::{CurseforgeFingerprintMetadataItem, ModrinthProjectsMetadataItem, ModrinthVersionsFromHashesMetadataItem},
-        manager::MetaLoadError,
+    BackendState, metadata::{
+        items::{CurseforgeFingerprintMetadataItem, FabricLoaderManifestMetadataItem, ForgeInstallerMavenMetadataItem, ModrinthProjectsMetadataItem, ModrinthVersionsFromHashesMetadataItem, NeoforgeInstallerMavenMetadataItem}, manager::MetaLoadError,
     },
 };
 
@@ -76,6 +75,20 @@ struct ExportInstanceData {
     dot_minecraft_path: Arc<Path>,
     configuration: InstanceConfiguration,
     sync_targets: SyncTargets,
+}
+
+impl ExportInstanceData {
+    async fn determine_loader_version(&self, backend: &BackendState) -> Option<Ustr> {
+        match self.configuration.loader {
+            Loader::Fabric => backend.meta.fetch(&FabricLoaderManifestMetadataItem).await.ok()
+                .and_then(|manifest| self.configuration.determine_fabric_loader_version(&manifest)),
+            Loader::Forge => backend.meta.fetch(&ForgeInstallerMavenMetadataItem).await.ok()
+                .and_then(|manifest| self.configuration.determine_forge_loader_version(&manifest)),
+            Loader::NeoForge => backend.meta.fetch(&NeoforgeInstallerMavenMetadataItem).await.ok()
+                .and_then(|manifest| self.configuration.determine_neoforge_loader_version(&manifest)),
+            Loader::Vanilla => None,
+        }
+    }
 }
 
 struct ModrinthResolvedFile {
@@ -210,7 +223,8 @@ async fn export_modrinth_pack(
         exclude.insert(resolved_file.source.clone());
     }
 
-    let index_json = build_modrinth_index(instance, options, &resolved)?;
+    let loader_version = instance.determine_loader_version(backend).await;
+    let index_json = build_modrinth_index(instance, loader_version, options, &resolved)?;
     let extra_files = vec![("modrinth.index.json".to_string(), index_json)];
 
     let write_tracker = ProgressTracker::new("Writing zip".into(), backend.send.clone());
@@ -256,7 +270,8 @@ async fn export_curseforge_pack(
         exclude.insert(resolved_file.rel_path.clone());
     }
 
-    let manifest_json = build_curseforge_manifest(instance, options, &resolved)?;
+    let loader_version = instance.determine_loader_version(backend).await;
+    let manifest_json = build_curseforge_manifest(instance, loader_version, options, &resolved)?;
     let modlist_html = build_curseforge_modlist(&resolved);
     let extra_files = vec![
         ("manifest.json".to_string(), manifest_json),
@@ -435,11 +450,14 @@ fn should_skip(rel: &SafePath, rel_to_dot_minecraft: Option<&SafePath>, options:
 
     match name {
         "logs" | "crash-reports" => !options.include_logs,
-        ".cache" | "downloads" => !options.include_cache,
+        ".cache" | "downloads" | ".fabric" => !options.include_cache,
         "saves" => !options.include_saves,
         "mods" => !options.include_mods,
         "resourcepacks" => !options.include_resourcepacks,
+        "shaderpacks" => !options.include_shaders,
         "config" => !options.include_configs,
+        "screenshots" => !options.include_screenshots,
+        "backups" => !options.include_backups,
         _ => false,
     }
 }
@@ -470,7 +488,7 @@ fn ends_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
         return false;
     }
     let start = haystack.len() - needle.len();
-    haystack[start..].eq_ignore_ascii_case(needle)
+    haystack.as_bytes()[start..].eq_ignore_ascii_case(needle.as_bytes())
 }
 
 async fn resolve_modrinth_files(
@@ -488,6 +506,10 @@ async fn resolve_modrinth_files(
             continue;
         }
         if is_resourcepack_file(&file.rel) && options.include_resourcepacks {
+            candidates.push(file);
+            continue;
+        }
+        if is_shaderpack_file(&file.rel) && options.include_shaders {
             candidates.push(file);
         }
     }
@@ -625,6 +647,10 @@ async fn resolve_curseforge_files(
         }
         if is_resourcepack_file(&file.rel) && options.include_resourcepacks {
             candidates.push((file.rel.clone(), file.abs.clone(), file.enabled, false));
+            continue;
+        }
+        if is_shaderpack_file(&file.rel) && options.include_shaders {
+            candidates.push((file.rel.clone(), file.abs.clone(), file.enabled, false));
         }
     }
 
@@ -678,6 +704,7 @@ async fn resolve_curseforge_files(
 
 fn build_modrinth_index(
     instance: &ExportInstanceData,
+    loader_version: Option<Ustr>,
     options: &ExportOptions,
     resolved: &[ModrinthResolvedFile],
 ) -> Result<Vec<u8>, String> {
@@ -685,7 +712,7 @@ fn build_modrinth_index(
 
     let mut dependencies = indexmap::IndexMap::new();
     dependencies.insert("minecraft".into(), config.minecraft_version.as_str().into());
-    if let Some(loader_version) = config.preferred_loader_version {
+    if let Some(loader_version) = loader_version {
         match config.loader {
             Loader::Fabric => { dependencies.insert("fabric-loader".into(), loader_version.as_str().into()); },
             Loader::Forge => { dependencies.insert("forge".into(), loader_version.as_str().into()); },
@@ -729,6 +756,7 @@ fn build_modrinth_index(
 
 fn build_curseforge_manifest(
     instance: &ExportInstanceData,
+    loader_version: Option<Ustr>,
     options: &ExportOptions,
     resolved: &[CurseforgeResolvedFile],
 ) -> Result<Vec<u8>, String> {
@@ -750,7 +778,7 @@ fn build_curseforge_manifest(
     minecraft.insert("version".into(), serde_json::Value::from(config.minecraft_version.as_str()));
 
     let mut mod_loaders = Vec::new();
-    if let Some(loader_version) = config.preferred_loader_version {
+    if let Some(loader_version) = loader_version {
         let loader_id = match config.loader {
             Loader::Fabric => format!("fabric-{}", loader_version),
             Loader::Forge => format!("forge-{}", loader_version),
@@ -961,6 +989,18 @@ fn is_mod_file(path: &SafePath) -> bool {
 
 fn is_resourcepack_file(path: &SafePath) -> bool {
     if !path.starts_with("resourcepacks") {
+        return false;
+    }
+
+    let Some(filename) = path.file_name() else {
+        return false;
+    };
+
+    filename.ends_with(".zip") || filename.ends_with(".zip.disabled")
+}
+
+fn is_shaderpack_file(path: &SafePath) -> bool {
+    if !path.starts_with("shaderpacks") {
         return false;
     }
 

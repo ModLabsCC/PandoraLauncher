@@ -14,7 +14,7 @@ use ustr::Ustr;
 use crate::{
     component::error_alert::ErrorAlert, entity::{
         DataEntities, instance::ContentStates, metadata::{AsMetadataResult, FrontendMetadata, FrontendMetadataResult}
-    }, icon::PandoraIcon, interface_config::InterfaceConfig, pages::page::Page,
+    }, icon::PandoraIcon, interface_config::InterfaceConfig, pages::page::Page, format_downloads
 };
 
 pub struct CurseforgeSearchPage {
@@ -476,10 +476,10 @@ impl CurseforgeSearchPage {
 
                 let name = SharedString::new(hit.name.clone());
                 let description = SharedString::new(hit.summary.clone());
+                let tag_separator = SharedString::new("•");
 
-                let author_line = div().text_color(cx.theme().muted_foreground).text_sm().pb_px().child(author);
+                let author_line = div().text_color(theme.muted_foreground).text_sm().pb_px().child(author);
 
-                let muted = cx.theme().muted_foreground;
                 let mut is_categories_empty = true;
                 let categories = hit.categories.iter().filter_map(|category| {
                     if category.is_class {
@@ -489,10 +489,10 @@ impl CurseforgeSearchPage {
                     Some(SharedString::new(category.name.clone()).into_any_element())
                 });
                 let categories = itertools::Itertools::intersperse_with(categories,
-                    || div().flex_shrink_0().w_px().h_1_2().bg(muted).into_any_element());
+                    || div().flex_shrink_0().child(tag_separator.clone()).into_any_element());
 
                 let downloads = h_flex()
-                    .gap_0p5()
+                    .gap_1()
                     .child(PandoraIcon::Download)
                     .child(format_downloads(hit.download_count));
 
@@ -629,7 +629,9 @@ impl CurseforgeSearchPage {
                             )
                             .child(
                                 h_flex()
-                                    .gap_2p5()
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
+                                    .gap_1()
                                     .child(PandoraIcon::Tags)
                                     .children(categories),
                             ),
@@ -919,18 +921,6 @@ impl Render for CurseforgeSearchPage {
 
         h_flex().flex_1().min_h_0().size_full().child(parameters).child(content)
     }
-}
-
-pub fn format_downloads(downloads: u64) -> SharedString {
-    if downloads >= 1_000_000_000 {
-        t::instance::content::downloads::b((downloads / 10_000_000) as f64 / 100.0)
-    } else if downloads >= 1_000_000 {
-        t::instance::content::downloads::m((downloads / 10_000) as f64 / 100.0)
-    } else if downloads >= 10_000 {
-        t::instance::content::downloads::k((downloads / 10) as f64 / 100.0)
-    } else {
-        t::instance::content::downloads::n(downloads)
-    }.into()
 }
 
 const FILTER_MOD_CATEGORIES: &[(&'static str, u32)] = &[

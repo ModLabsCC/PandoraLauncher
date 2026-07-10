@@ -91,6 +91,8 @@ pub fn start(
         gpui_component::init(cx);
         InterfaceConfig::init(cx, launcher_dir.join("interface.json").into());
 
+        t::set_lang(&InterfaceConfig::get(cx).language);
+
         gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
 
         let theme_folder = launcher_dir.join("themes");
@@ -331,4 +333,16 @@ pub(crate) fn open_folder(path: &Path, window: &mut Window, cx: &mut App) {
         let notification: Notification = (NotificationType::Error, t::file_system::open_folder::not_a_directory()).into();
         window.push_notification(notification.autohide(false), cx);
     }
+}
+
+pub fn format_downloads(downloads: u64) -> SharedString {
+    if downloads >= 1_000_000_000 {
+        t::instance::content::downloads::b((downloads / 10_000_000) as f64 / 100.0)
+    } else if downloads >= 1_000_000 {
+        t::instance::content::downloads::m((downloads / 10_000) as f64 / 100.0)
+    } else if downloads >= 10_000 {
+        t::instance::content::downloads::k((downloads / 10) as f64 / 100.0)
+    } else {
+        t::instance::content::downloads::n(downloads)
+    }.into()
 }

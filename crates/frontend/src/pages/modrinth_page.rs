@@ -16,7 +16,7 @@ use strum::IntoEnumIterator;
 use crate::{
     component::error_alert::ErrorAlert, entity::{
         DataEntities, instance::ContentStates, metadata::{AsMetadataResult, FrontendMetadata, FrontendMetadataResult}
-    }, icon::PandoraIcon, interface_config::InterfaceConfig, pages::page::Page, ui
+    }, icon::PandoraIcon, interface_config::InterfaceConfig, pages::page::Page, ui, format_downloads
 };
 
 pub struct ModrinthSearchPage {
@@ -493,7 +493,7 @@ impl ModrinthSearchPage {
                     .map(SharedString::new)
                     .unwrap_or(t::instance::content::no_description().into());
 
-                let author_line = div().text_color(cx.theme().muted_foreground).text_sm().pb_px().child(author);
+                let author_line = div().text_color(theme.muted_foreground).text_sm().pb_px().child(author);
 
                 let client_side = hit.client_side.unwrap_or(ModrinthSideRequirement::Unknown);
                 let server_side = hit.server_side.unwrap_or(ModrinthSideRequirement::Unknown);
@@ -512,12 +512,12 @@ impl ModrinthSearchPage {
                         let icon = Icon::empty().path(icon);
                         let translated_category = t::modrinth::category::get(category, false)
                             .unwrap_or("missing_translation");
-                        Some(h_flex().gap_0p5().child(icon).child(translated_category))
+                        Some(h_flex().gap_1().child(icon).child(translated_category))
                     })
                 });
 
                 let downloads = h_flex()
-                    .gap_0p5()
+                    .gap_1()
                     .child(PandoraIcon::Download)
                     .child(format_downloads(hit.downloads));
 
@@ -626,6 +626,8 @@ impl ModrinthSearchPage {
                             .child(
                                 h_flex()
                                     .text_decoration_0()
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
                                     .gap_2p5()
                                     .children(std::iter::once(environment).chain(categories)),
                             ),
@@ -996,18 +998,6 @@ impl Render for ModrinthSearchPage {
 
         h_flex().flex_1().min_h_0().size_full().child(parameters).child(content)
     }
-}
-
-pub fn format_downloads(downloads: u64) -> SharedString {
-    if downloads >= 1_000_000_000 {
-        t::instance::content::downloads::b((downloads / 10_000_000) as f64 / 100.0)
-    } else if downloads >= 1_000_000 {
-        t::instance::content::downloads::m((downloads / 10_000) as f64 / 100.0)
-    } else if downloads >= 10_000 {
-        t::instance::content::downloads::k((downloads / 10) as f64 / 100.0)
-    } else {
-        t::instance::content::downloads::n(downloads)
-    }.into()
 }
 
 pub fn icon_for(str: &str) -> Option<&'static str> {

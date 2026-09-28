@@ -31,6 +31,7 @@ pub struct ModrinthSearchPage {
     search_state: Entity<InputState>,
     _search_input_subscription: Subscription,
     _delayed_clear_task: Task<()>,
+    _meta_reload_task: Task<()>,
     filter_loaders: EnumSet<Loader>,
     filter_categories: BTreeSet<&'static str>,
     sort_option: ModrinthSearchIndex,
@@ -143,21 +144,23 @@ impl ModrinthSearchPage {
                 for content_folder in ContentFolder::iter() {
                     let mut specific_installed_content: FxHashMap<Arc<str>, Vec<InstalledContent>> = FxHashMap::default();
 
-                    for summary in instance_content[content_folder].read(cx).iter() {
-                        let ContentSource::ModrinthProject { project_id } = &summary.content_source else {
-                            continue;
-                        };
+                    if let Some(content) = instance_content[content_folder].read(cx) {
+                        for summary in content.iter() {
+                            let ContentSource::ModrinthProject { project_id } = &summary.content_source else {
+                                continue;
+                            };
 
-                        let installed_content = InstalledContent {
-                            content_id: summary.id,
-                            status: summary.update.status_if_matches(loader, minecraft_version.as_str()),
-                        };
+                            let installed_content = InstalledContent {
+                                content_id: summary.id,
+                                status: summary.update.status_if_matches(loader, minecraft_version.as_str()),
+                            };
 
-                        let installed = all_installed_content_by_project.entry(project_id.clone()).or_default();
-                        installed.push(installed_content);
+                            let installed = all_installed_content_by_project.entry(project_id.clone()).or_default();
+                            installed.push(installed_content);
 
-                        let installed = specific_installed_content.entry(project_id.clone()).or_default();
-                        installed.push(installed_content);
+                            let installed = specific_installed_content.entry(project_id.clone()).or_default();
+                            installed.push(installed_content);
+                        }
                     }
 
                     specific_installed_content_by_project[content_folder] = specific_installed_content;
@@ -168,17 +171,18 @@ impl ModrinthSearchPage {
 
                         specific.clear();
 
-                        let content = entity.read(cx);
-                        for summary in content.iter() {
-                            let ContentSource::ModrinthProject { project_id } = &summary.content_source else {
-                                continue;
-                            };
+                        if let Some(content) = entity.read(cx) {
+                            for summary in content.iter() {
+                                let ContentSource::ModrinthProject { project_id } = &summary.content_source else {
+                                    continue;
+                                };
 
-                            let installed = specific.entry(project_id.clone()).or_default();
-                            installed.push(InstalledContent {
-                                content_id: summary.id,
-                                status: summary.update.status_if_matches(loader, minecraft_version.as_str()),
-                            })
+                                let installed = specific.entry(project_id.clone()).or_default();
+                                installed.push(InstalledContent {
+                                    content_id: summary.id,
+                                    status: summary.update.status_if_matches(loader, minecraft_version.as_str()),
+                                })
+                            }
                         }
 
                         page.all_installed_content_by_project.clear();
@@ -207,6 +211,7 @@ impl ModrinthSearchPage {
             search_state,
             _search_input_subscription,
             _delayed_clear_task: Task::ready(()),
+            _meta_reload_task: Task::ready(()),
             filter_loaders: Default::default(),
             filter_categories: Default::default(),
             sort_option: ModrinthSearchIndex::default(),
@@ -260,7 +265,7 @@ impl ModrinthSearchPage {
                 ModrinthProjectType::Modpack => t::instance::content::search::modpack(),
                 ModrinthProjectType::Resourcepack => t::instance::content::search::resourcepack(),
                 ModrinthProjectType::Shader => t::instance::content::search::shader(),
-                ModrinthProjectType::Other => t::instance::content::search::file(),
+                ModrinthProjectType::Other => t::common::search(),
             };
             state.set_placeholder(placeholder, window, cx)
         });
@@ -321,6 +326,7 @@ impl ModrinthSearchPage {
         }
         self.pending_reload = false;
         self.search_error = None;
+        self._meta_reload_task = Task::ready(());
 
         let query = if self.last_search.is_empty() {
             None
@@ -410,9 +416,20 @@ impl ModrinthSearchPage {
                             page.loading = None;
                             cx.notify();
                         },
-                        FrontendMetadataResult::Error(shared_string) => {
+                        FrontendMetadataResult::Error(shared_string, alive) => {
                             page.search_error = Some(shared_string);
                             page.loading = None;
+
+                            if let Some(alive) = alive {
+                                page._meta_reload_task = cx.spawn(async move |page, cx| {
+                                    alive.await_notification().await;
+                                    let _ = page.update(cx, |page, cx| {
+                                        page.load_more(cx);
+                                        cx.notify();
+                                    });
+                                });
+                            }
+
                             cx.notify();
                         },
                     }
@@ -425,8 +442,18 @@ impl ModrinthSearchPage {
             FrontendMetadataResult::Loaded(result) => {
                 self.apply_search_data(result);
             },
-            FrontendMetadataResult::Error(shared_string) => {
+            FrontendMetadataResult::Error(shared_string, alive) => {
                 self.search_error = Some(shared_string);
+                self.loading = None;
+
+                if let Some(alive) = alive {
+                    self._meta_reload_task = cx.spawn(async move |page, cx| {
+                        alive.await_notification().await;
+                        let _ = page.update(cx, |page, cx| {
+                            page.load_more(cx);
+                        });
+                    });
+                }
             },
         }
     }
@@ -459,7 +486,7 @@ impl ModrinthSearchPage {
                         return div()
                             .pl_3()
                             .pt_3()
-                            .child(ErrorAlert::new(t::instance::content::requesting_from_modrinth_error().into(), search_error));
+                            .child(ErrorAlert::new(t::instance::content::requesting_from_error("Modrinth").into(), search_error));
                     } else {
                         should_load_more = true;
                         return div()
@@ -567,7 +594,7 @@ impl ModrinthSearchPage {
                             cx.stop_propagation();
 
                             if project_type != ModrinthProjectType::Other {
-                                primary_action.perform(name.as_str(), &project_id, project_type, install_for, &data, window, cx);
+                                primary_action.perform(name.clone(), &project_id, project_type, install_for, &data, window, cx);
                             } else {
                                 window.push_notification(
                                     (
@@ -595,7 +622,7 @@ impl ModrinthSearchPage {
                         v_flex()
                             .id(("open-project", index))
                             .h(px(104.0))
-                            .flex_grow()
+                            .flex_grow(1.0)
                             .gap_1()
                             .overflow_hidden()
                             .cursor_pointer()
@@ -699,7 +726,7 @@ impl PrimaryAction {
         }
     }
 
-    pub fn perform(&self, name: &str, project_id: &Arc<str>, project_type: ModrinthProjectType, install_for: Option<InstanceID>, data: &DataEntities, window: &mut Window, cx: &mut App) {
+    pub fn perform(&self, name: SharedString, project_id: &Arc<str>, project_type: ModrinthProjectType, install_for: Option<InstanceID>, data: &DataEntities, window: &mut Window, cx: &mut App) {
         match self {
             PrimaryAction::Install | PrimaryAction::Reinstall => {
                 crate::modals::modrinth_install::open(
@@ -714,12 +741,12 @@ impl PrimaryAction {
             },
             PrimaryAction::InstallLatest => {
                 let Some(install_for) = install_for else {
-                    window.push_notification((NotificationType::Error, "Unable to find instance"), cx);
+                    window.push_notification((NotificationType::Error, t::instance::unable_to_find()), cx);
                     return;
                 };
 
                 let Some(entry) = data.instances.read(cx).entries.get(&install_for) else {
-                    window.push_notification((NotificationType::Error, "Unable to find instance"), cx);
+                    window.push_notification((NotificationType::Error, t::instance::unable_to_find()), cx);
                     return;
                 };
 
@@ -849,24 +876,29 @@ impl Render for ModrinthSearchPage {
             .child(top_bar)
             .child(div().size_full().rounded_lg().border_1().border_color(theme.border).child(list));
 
+        let disabled_color = cx.theme().button_foreground.opacity(0.5);
+        let selection_button = |id: &'static str, selected: bool| -> Button {
+            Button::new(id).selected(selected).when(!selected, |b| b.text_color(disabled_color))
+        };
+
         let config = InterfaceConfig::get(cx);
         let filter_project_type = config.modrinth_page_project_type;
 
         let type_button_group = ButtonGroup::new("type")
             .layout(Axis::Vertical)
             .outline()
-            .child(Button::new("mods").label(t::instance::content::mods()).selected(filter_project_type == ModrinthProjectType::Mod))
-            .child(
-                Button::new("modpacks")
-                    .label(t::instance::content::modpacks())
-                    .selected(filter_project_type == ModrinthProjectType::Modpack),
+            .child(selection_button("mods", filter_project_type == ModrinthProjectType::Mod)
+                .label(t::instance::content::mods())
             )
-            .child(
-                Button::new("resourcepacks")
-                    .label(t::instance::content::resourcepacks())
-                    .selected(filter_project_type == ModrinthProjectType::Resourcepack),
+            .child(selection_button("modpacks", filter_project_type == ModrinthProjectType::Modpack)
+                .label(t::instance::content::modpacks())
             )
-            .child(Button::new("shaders").label(t::instance::content::shaders()).selected(filter_project_type == ModrinthProjectType::Shader))
+            .child(selection_button("resourcepacks", filter_project_type == ModrinthProjectType::Resourcepack)
+                .label(t::instance::content::resourcepacks())
+            )
+            .child(selection_button("shaders", filter_project_type == ModrinthProjectType::Shader)
+                .label(t::instance::content::shaders())
+            )
             .on_click(cx.listener(|page, clicked: &Vec<usize>, window, cx| match clicked[0] {
                 0 => page.set_project_type(ModrinthProjectType::Mod, window, cx),
                 1 => page.set_project_type(ModrinthProjectType::Modpack, window, cx),
@@ -880,9 +912,9 @@ impl Render for ModrinthSearchPage {
                 .layout(Axis::Vertical)
                 .outline()
                 .multiple(true)
-                .child(Button::new("fabric").label(t::modrinth::category::fabric()).selected(self.filter_loaders.contains(Loader::Fabric)))
-                .child(Button::new("forge").label(t::modrinth::category::forge()).selected(self.filter_loaders.contains(Loader::Forge)))
-                .child(Button::new("neoforge").label(t::modrinth::category::neoforge()).selected(self.filter_loaders.contains(Loader::NeoForge)))
+                .child(selection_button("fabric", self.filter_loaders.contains(Loader::Fabric)).label(t::modrinth::category::fabric()))
+                .child(selection_button("forge", self.filter_loaders.contains(Loader::Forge)).label(t::modrinth::category::forge()))
+                .child(selection_button("neoforge", self.filter_loaders.contains(Loader::NeoForge)).label(t::modrinth::category::neoforge()))
                 .on_click(cx.listener(|page, clicked: &Vec<usize>, window, cx| {
                     page.set_filter_loaders(clicked.iter().filter_map(|index| match index {
                         0 => Some(Loader::Fabric),
@@ -922,14 +954,13 @@ impl Render for ModrinthSearchPage {
                 .outline()
                 .multiple(true)
                 .children(categories.iter().map(|id| {
-                    Button::new(*id)
+                    selection_button(*id, self.filter_categories.contains(id))
                         .child(
                             h_flex().w_full().justify_start().gap_2()
                             .when_some(icon_for(id), |this, icon| {
                                 this.child(Icon::empty().path(icon))
                             })
                             .child(t::modrinth::category::get(id, true).unwrap_or("missing_translation")))
-                        .selected(self.filter_categories.contains(id))
                 }))
                 .on_click(cx.listener(|page, clicked: &Vec<usize>, window, cx| {
                     page.set_filter_categories(clicked.iter()
@@ -956,10 +987,9 @@ impl Render for ModrinthSearchPage {
                 .layout(Axis::Vertical)
                 .outline()
                 .children(ModrinthSearchIndex::iter().map(|search_index| {
-                    Button::new(search_index.as_str())
+                    selection_button(search_index.as_str(), search_index == self.sort_option)
                         .child(h_flex().w_full().justify_start().gap_2()
                             .child(t::modrinth::sort::get(search_index.as_str()).unwrap_or("missing_translation")))
-                        .selected(search_index == self.sort_option)
                 }))
                 .on_click(cx.listener(move |page, clicked: &Vec<usize>, window, cx| {
                     let sort_option = ModrinthSearchIndex::iter().nth(clicked[0]).unwrap_or_default();
@@ -971,9 +1001,9 @@ impl Render for ModrinthSearchPage {
         let is_mod = filter_project_type == ModrinthProjectType::Mod || filter_project_type == ModrinthProjectType::Modpack;
         let filter_version_toggle = if is_mod && let Some(filter_version) = self.filter_version {
             let title = format!("{}: {}", t::instance::version(), filter_version);
-            Some(Button::new("filter_version").label(title)
+            Some(selection_button("filter_version", InterfaceConfig::get(cx).content_filter_version)
+                .label(title)
                 .outline()
-                .selected(InterfaceConfig::get(cx).content_filter_version)
                 .on_click(cx.listener(|page, _, _, cx| {
                     let cfg = InterfaceConfig::get_mut(cx);
                     cfg.content_filter_version = !cfg.content_filter_version;

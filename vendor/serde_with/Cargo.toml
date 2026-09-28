@@ -11,9 +11,9 @@
 
 [package]
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.88"
 name = "serde_with"
-version = "3.17.0"
+version = "3.22.0"
 authors = [
     "Jonas Bushart",
     "Marcin Kaźmierczak",
@@ -53,6 +53,7 @@ all-features = true
 rustdoc-args = [
     "--cfg=docsrs",
     "-Zunstable-options",
+    "--generate-link-to-definition",
     "--generate-macro-expansion",
     "--extern-html-root-url=core=https://doc.rust-lang.org",
     "--extern-html-root-url=alloc=https://doc.rust-lang.org",
@@ -90,10 +91,16 @@ status = "actively-developed"
 alloc = [
     "serde_core/alloc",
     "base64?/alloc",
+    "bs58?/alloc",
     "chrono_0_4?/alloc",
     "hex?/alloc",
+    "jiff_0_2?/alloc",
     "serde_json?/alloc",
     "time_0_3?/alloc",
+]
+base58 = [
+    "dep:bs58",
+    "alloc",
 ]
 base64 = [
     "dep:base64",
@@ -122,6 +129,10 @@ hashbrown_0_16 = [
     "dep:hashbrown_0_16",
     "alloc",
 ]
+hashbrown_0_17 = [
+    "dep:hashbrown_0_17",
+    "alloc",
+]
 hex = [
     "dep:hex",
     "alloc",
@@ -135,6 +146,7 @@ indexmap_2 = [
     "dep:indexmap_2",
     "alloc",
 ]
+jiff_0_2 = ["dep:jiff_0_2"]
 json = [
     "dep:serde_json",
     "alloc",
@@ -144,6 +156,7 @@ schemars_0_8 = [
     "dep:schemars_0_8",
     "std",
     "serde_with_macros?/schemars_0_8",
+    "dep:serde_json",
 ]
 schemars_0_9 = [
     "dep:schemars_0_9",
@@ -160,11 +173,17 @@ schemars_1 = [
 smallvec_1 = ["dep:smallvec_1"]
 std = [
     "alloc",
+    "bs58?/std",
     "serde_core/std",
     "chrono_0_4?/clock",
     "chrono_0_4?/std",
     "indexmap_1?/std",
     "indexmap_2?/std",
+    "jiff_0_2?/std",
+    "jiff_0_2?/tz-system",
+    "jiff_0_2?/tzdb-bundle-platform",
+    "jiff_0_2?/tzdb-concatenated",
+    "jiff_0_2?/tzdb-zoneinfo",
     "time_0_3?/serde-well-known",
     "time_0_3?/std",
     "schemars_0_9?/std",
@@ -175,6 +194,14 @@ time_0_3 = ["dep:time_0_3"]
 [lib]
 name = "serde_with"
 path = "src/lib.rs"
+
+[[test]]
+name = "base58"
+path = "tests/base58.rs"
+required-features = [
+    "base58",
+    "macros",
+]
 
 [[test]]
 name = "base64"
@@ -222,6 +249,14 @@ required-features = [
 ]
 
 [[test]]
+name = "hashbrown_0_17"
+path = "tests/hashbrown_0_17.rs"
+required-features = [
+    "hashbrown_0_17",
+    "macros",
+]
+
+[[test]]
 name = "hex"
 path = "tests/hex.rs"
 required-features = [
@@ -246,6 +281,14 @@ required-features = [
 ]
 
 [[test]]
+name = "jiff_0_2"
+path = "tests/jiff_0_2.rs"
+required-features = [
+    "jiff_0_2",
+    "macros",
+]
+
+[[test]]
 name = "json"
 path = "tests/json.rs"
 required-features = [
@@ -263,6 +306,8 @@ name = "schemars_0_8"
 path = "tests/schemars_0_8/main.rs"
 required-features = [
     "schemars_0_8",
+    "base58",
+    "base64",
     "hex",
 ]
 
@@ -272,6 +317,8 @@ path = "tests/schemars_0_9/main.rs"
 required-features = [
     "schemars_0_9",
     "std",
+    "base58",
+    "base64",
     "hex",
 ]
 
@@ -281,6 +328,8 @@ path = "tests/schemars_1/main.rs"
 required-features = [
     "schemars_1",
     "std",
+    "base58",
+    "base64",
     "hex",
 ]
 
@@ -327,6 +376,11 @@ version = "0.22.1"
 optional = true
 default-features = false
 
+[dependencies.bs58]
+version = "0.5.1"
+optional = true
+default-features = false
+
 [dependencies.chrono_0_4]
 version = "0.4.20"
 features = ["serde"]
@@ -359,6 +413,13 @@ optional = true
 default-features = false
 package = "hashbrown"
 
+[dependencies.hashbrown_0_17]
+version = "0.17.0"
+features = ["serde"]
+optional = true
+default-features = false
+package = "hashbrown"
+
 [dependencies.hex]
 version = "0.4.3"
 optional = true
@@ -377,6 +438,12 @@ features = ["serde"]
 optional = true
 default-features = false
 package = "indexmap"
+
+[dependencies.jiff_0_2]
+version = "0.2.0"
+optional = true
+default-features = false
+package = "jiff"
 
 [dependencies.schemars_0_8]
 version = "0.8.16"
@@ -407,7 +474,7 @@ optional = true
 default-features = false
 
 [dependencies.serde_with_macros]
-version = "=3.17.0"
+version = "=3.22.0"
 optional = true
 
 [dependencies.smallvec_1]
@@ -417,7 +484,7 @@ default-features = false
 package = "smallvec"
 
 [dependencies.time_0_3]
-version = "~0.3.36"
+version = "~0.3.47"
 optional = true
 default-features = false
 package = "time"
@@ -489,6 +556,7 @@ version = "0.10.3"
 [lints.clippy]
 cloned_instead_of_copied = "warn"
 default_trait_access = "warn"
+disallowed_methods = "warn"
 doc_markdown = "warn"
 explicit_auto_deref = "allow"
 manual-unwrap-or-default = "allow"
@@ -501,6 +569,7 @@ trivial_casts = "warn"
 trivial_numeric_casts = "warn"
 unused_extern_crates = "warn"
 unused_import_braces = "warn"
+unused_qualifications = "warn"
 variant_size_differences = "warn"
 
 [lints.rust.rust_2018_idioms]

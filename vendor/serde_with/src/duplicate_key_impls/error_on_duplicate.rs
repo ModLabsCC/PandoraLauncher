@@ -1,4 +1,14 @@
 use crate::prelude::*;
+#[cfg(any(
+    feature = "std",
+    feature = "hashbrown_0_14",
+    feature = "hashbrown_0_15",
+    feature = "hashbrown_0_16",
+    feature = "hashbrown_0_17",
+    feature = "indexmap_1",
+    feature = "indexmap_2"
+))]
+use crate::utils::size_hint_cautious;
 
 pub trait PreventDuplicateInsertsSet<T> {
     fn new(size_hint: Option<usize>) -> Self;
@@ -22,10 +32,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<T>(size_hint), S::default())
     }
 
     #[inline]
@@ -42,10 +49,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<T>(size_hint), S::default())
     }
 
     #[inline]
@@ -62,10 +66,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<T>(size_hint), S::default())
     }
 
     #[inline]
@@ -82,10 +83,24 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<T>(size_hint), S::default())
+    }
+
+    #[inline]
+    fn insert(&mut self, value: T) -> bool {
+        self.insert(value)
+    }
+}
+
+#[cfg(feature = "hashbrown_0_17")]
+impl<T, S> PreventDuplicateInsertsSet<T> for hashbrown_0_17::HashSet<T, S>
+where
+    T: Eq + Hash,
+    S: BuildHasher + Default,
+{
+    #[inline]
+    fn new(size_hint: Option<usize>) -> Self {
+        Self::with_capacity_and_hasher(size_hint_cautious::<T>(size_hint), S::default())
     }
 
     #[inline]
@@ -102,10 +117,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<T>(size_hint), S::default())
     }
 
     #[inline]
@@ -122,10 +134,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<T>(size_hint), S::default())
     }
 
     #[inline]
@@ -157,10 +166,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
     }
 
     #[inline]
@@ -177,10 +183,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
     }
 
     #[inline]
@@ -197,10 +200,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
     }
 
     #[inline]
@@ -217,10 +217,24 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
+    }
+
+    #[inline]
+    fn insert(&mut self, key: K, value: V) -> bool {
+        self.insert(key, value).is_none()
+    }
+}
+
+#[cfg(feature = "hashbrown_0_17")]
+impl<K, V, S> PreventDuplicateInsertsMap<K, V> for hashbrown_0_17::HashMap<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher + Default,
+{
+    #[inline]
+    fn new(size_hint: Option<usize>) -> Self {
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
     }
 
     #[inline]
@@ -237,10 +251,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
     }
 
     #[inline]
@@ -257,10 +268,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
     }
 
     #[inline]

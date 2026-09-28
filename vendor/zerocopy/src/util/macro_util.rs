@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-2-Clause OR Apache-2.0 OR MIT
+//
 // Copyright 2022 The Fuchsia Authors
 //
 // Licensed under a BSD-style license <LICENSE-BSD>, Apache License, Version 2.0
@@ -329,9 +331,12 @@ pub use __size_of::size_of;
 #[doc(hidden)] // `#[macro_export]` bypasses this module's `#[doc(hidden)]`.
 #[macro_export]
 macro_rules! struct_padding {
-    ($t:ty, [$($ts:ty),*]) => {
+    ($t:ty, $_align:expr, $_packed:expr, [$($ts:ty),*]) => {{
+        // The `align` and `packed` directives can be ignored here. Regardless
+        // of if and how they are set, comparing the size of `$t` to the sum of
+        // its field sizes is a reliable indicator of the presence of padding.
         $crate::util::macro_util::size_of::<$t>() - (0 $(+ $crate::util::macro_util::size_of::<$ts>())*)
-    };
+    }};
 }
 
 /// Does the `repr(C)` struct type `$t` have padding?
@@ -342,10 +347,10 @@ macro_rules! struct_padding {
 #[doc(hidden)] // `#[macro_export]` bypasses this module's `#[doc(hidden)]`.
 #[macro_export]
 macro_rules! repr_c_struct_has_padding {
-    ($t:ty, [$($ts:tt),*]) => {{
+    ($t:ty, $align:expr, $packed:expr, [$($ts:tt),*]) => {{
         let layout = $crate::DstLayout::for_repr_c_struct(
-            $crate::util::macro_util::core_reexport::option::Option::None,
-            $crate::util::macro_util::core_reexport::option::Option::None,
+            $align,
+            $packed,
             &[$($crate::repr_c_struct_has_padding!(@field $ts),)*]
         );
         layout.requires_static_padding() || layout.requires_dynamic_padding()
@@ -379,7 +384,10 @@ macro_rules! repr_c_struct_has_padding {
 #[doc(hidden)] // `#[macro_export]` bypasses this module's `#[doc(hidden)]`.
 #[macro_export]
 macro_rules! union_padding {
-    ($t:ty, [$($ts:ty),*]) => {{
+    ($t:ty, $_align:expr, $_packed:expr, [$($ts:ty),*]) => {{
+        // The `align` and `packed` directives can be ignored here. Regardless
+        // of if and how they are set, comparing the size of `$t` to each of its
+        // field sizes is a reliable indicator of the presence of padding.
         let mut max = 0;
         $({
             let padding = $crate::util::macro_util::size_of::<$t>() - $crate::util::macro_util::size_of::<$ts>();
@@ -410,7 +418,14 @@ macro_rules! union_padding {
 #[doc(hidden)] // `#[macro_export]` bypasses this module's `#[doc(hidden)]`.
 #[macro_export]
 macro_rules! enum_padding {
-    ($t:ty, $disc:ty, $([$($ts:ty),*]),*) => {{
+    ($t:ty, $_align:expr, $packed:expr, $disc:ty, $([$($ts:ty),*]),*) => {{
+        // The `align` and `packed` directives are irrelevant. `$align` can be
+        // ignored because regardless of if and how it is set, comparing the
+        // size of `$t` to each of its field sizes is a reliable indicator of
+        // the presence of padding. `$packed` is irrelevant because it is
+        // forbidden on enums.
+        #[allow(clippy::as_conversions)]
+        const _: [(); 1] = [(); $packed.is_none() as usize];
         let mut max = 0;
         $({
             let padding = $crate::util::macro_util::size_of::<$t>()
@@ -752,16 +767,22 @@ impl<'a, Src, Dst> Wrap<&'a Src, &'a Dst> {
         <Wrap<&'a Wrapping<Src>, &'a Wrapping<Dst>> as TryTransmuteRefDst<'a>>::try_transmute_ref(
             src,
         )
-        // SAFETY: By the preceding assert, `Dst` and `Wrapping<Dst>` have the
-        // same alignment.
-        .map(|dst| unsafe { crate::util::transmute_ref::<_, _, BecauseImmutable>(dst) })
-        .map_err(|err| {
-            // SAFETY: By the preceding assert, `Src` and `Wrapping<Src>` have the
-            // same alignment.
-            ValidityError::new(unsafe {
-                crate::util::transmute_ref::<_, _, BecauseImmutable>(err.into_src())
-            })
-        })
+        .map(
+            // SAFETY: By the preceding assert, `Dst` and `Wrapping<Dst>` have
+            // the same alignment.
+            #[inline(always)]
+            |dst| unsafe { crate::util::transmute_ref::<_, _, BecauseImmutable>(dst) },
+        )
+        .map_err(
+            #[inline(always)]
+            |err| {
+                // SAFETY: By the preceding assert, `Src` and `Wrapping<Src>` have the
+                // same alignment.
+                ValidityError::new(unsafe {
+                    crate::util::transmute_ref::<_, _, BecauseImmutable>(err.into_src())
+                })
+            },
+        )
     }
 }
 
@@ -925,8 +946,26 @@ pub mod core_reexport {
     }
 }
 
+/// Projects `Self` to itself.
+///
+/// This is used by macros to have the compiler verify that two syntactically
+/// similar types actually resolve to the same type. The blanket implementation
+/// ensures that no other implementation can project a type to anything other
+/// than itself.
+#[doc(hidden)]
+pub trait Identity {
+    /// `Self`.
+    type Type: ?Sized;
+}
+
+impl<T: ?Sized> Identity for T {
+    type Type = T;
+}
+
 #[cfg(test)]
 mod tests {
+    use core::num::NonZeroUsize;
+
     use crate::util::testutil::*;
 
     #[cfg(__ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS)]
@@ -1125,7 +1164,7 @@ mod tests {
                 #[$cfg]
                 #[allow(dead_code)]
                 struct Test($($ts),*);
-                assert_eq!(struct_padding!(Test, [$($ts),*]), $expect);
+                assert_eq!(struct_padding!(Test, None::<NonZeroUsize>, None::<NonZeroUsize>, [$($ts),*]), $expect);
             }};
             (#[$cfg:meta] $(#[$cfgs:meta])* ($($ts:ty),*) => $expect:expr) => {
                 test!(#[$cfg] ($($ts),*) => $expect);
@@ -1156,7 +1195,7 @@ mod tests {
                 #[repr(C)]
                 #[allow(dead_code)]
                 struct Test($($ts),*);
-                assert_eq!(repr_c_struct_has_padding!(Test, [$($ts),*]), $expect);
+                assert_eq!(repr_c_struct_has_padding!(Test, None::<NonZeroUsize>, None::<NonZeroUsize>, [$($ts),*]), $expect);
             }};
         }
 
@@ -1192,7 +1231,7 @@ mod tests {
                 #[$cfg]
                 #[allow(unused)] // fields are never read
                 union Test{ $($fs: $ts),* }
-                assert_eq!(union_padding!(Test, [$($ts),*]), $expect);
+                assert_eq!(union_padding!(Test, None::<NonZeroUsize>, None::<usize>, [$($ts),*]), $expect);
             }};
             (#[$cfg:meta] $(#[$cfgs:meta])* {$($fs:ident: $ts:ty),*} => $expect:expr) => {
                 test!(#[$cfg] {$($fs: $ts),*} => $expect);
@@ -1231,7 +1270,7 @@ mod tests {
                     $($vs ($($ts),*),)*
                 }
                 assert_eq!(
-                    enum_padding!(Test, $disc, $([$($ts),*]),*),
+                    enum_padding!(Test, None::<NonZeroUsize>, None::<NonZeroUsize>, $disc, $([$($ts),*]),*),
                     $expect
                 );
             }};

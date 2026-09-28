@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
-use gpui::{App, ClickEvent, InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder};
-use gpui_component::{ActiveTheme, StyledExt, v_flex};
+use gpui::{AnyElement, App, ClickEvent, InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, rems};
+use gpui_component::{ActiveTheme, StyledExt, h_flex, v_flex};
 
 #[derive(IntoElement)]
 pub struct MenuGroup {
@@ -31,13 +31,14 @@ impl RenderOnce for MenuGroup {
             .text_color(cx.theme().sidebar_foreground.opacity(0.7))
             .child(self.title);
 
-        v_flex().gap_1().child(title).children(self.children)
+        v_flex().gap_0p5().overflow_x_hidden().child(title).children(self.children)
     }
 }
 
 #[derive(IntoElement)]
 pub struct MenuGroupItem {
     title: SharedString,
+    icon: Option<AnyElement>,
     active: bool,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
 }
@@ -46,9 +47,15 @@ impl MenuGroupItem {
     pub fn new(title: impl Into<SharedString>) -> Self {
         Self {
             title: title.into(),
+            icon: None,
             active: false,
             on_click: None,
         }
+    }
+
+    pub fn icon(mut self, icon: impl IntoElement) -> Self {
+        self.icon = Some(icon.into_any_element());
+        self
     }
 
     pub fn active(mut self, active: bool) -> Self {
@@ -64,11 +71,17 @@ impl MenuGroupItem {
 
 impl RenderOnce for MenuGroupItem {
     fn render(self, _window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
-        let mut item = div()
+        let mut item = h_flex()
+            .line_height(rems(1.0))
             .id(self.title.clone())
             .px_2()
-            .py_0p5()
+            .py_1()
+            .gap_2()
+            .items_center()
             .text_sm()
+            .overflow_x_hidden()
+            .whitespace_nowrap()
+            .when_some(self.icon, ParentElement::child)
             .child(self.title)
             .rounded(cx.theme().radius)
             .when_some(self.on_click, |this, on_click| {

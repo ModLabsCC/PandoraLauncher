@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-2-Clause OR Apache-2.0 OR MIT
+//
 // Copyright 2023 The Fuchsia Authors
 //
 // Licensed under a BSD-style license <LICENSE-BSD>, Apache License, Version 2.0
@@ -201,7 +203,10 @@ impl<T> Unalign<T> {
         let inner = Ptr::from_ref(self).transmute();
         match inner.try_into_aligned() {
             Ok(aligned) => Ok(aligned.as_ref()),
-            Err(err) => Err(err.map_src(|src| src.into_unalign().as_ref())),
+            Err(err) => Err(err.map_src(
+                #[inline(always)]
+                |src| src.into_unalign().as_ref(),
+            )),
         }
     }
 

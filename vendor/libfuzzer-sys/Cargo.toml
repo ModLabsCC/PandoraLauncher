@@ -12,7 +12,7 @@
 [package]
 edition = "2018"
 name = "libfuzzer-sys"
-version = "0.4.12"
+version = "0.4.13"
 authors = ["The rust-fuzz Project Developers"]
 build = "build.rs"
 exclude = [

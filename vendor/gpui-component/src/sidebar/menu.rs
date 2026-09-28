@@ -1,9 +1,10 @@
 use crate::{
-    ActiveTheme as _, Collapsible, Icon, IconName, Sizable as _, StyledExt,
+    ActiveTheme as _, Collapsible, Icon, IconName, Placement, Sizable as _, StyledExt,
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::{ContextMenuExt, PopupMenu},
     sidebar::SidebarItem,
+    tooltip::{ManagedTooltipExt as _, Tooltip},
     v_flex,
 };
 use gpui::{
@@ -97,6 +98,7 @@ pub struct SidebarMenuItem {
     default_open: bool,
     click_to_open: bool,
     collapsed: bool,
+    click_to_toggle: bool,
     children: Vec<Self>,
     suffix: Option<Rc<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>>,
     disabled: bool,
@@ -114,6 +116,7 @@ impl SidebarMenuItem {
             collapsed: false,
             default_open: false,
             click_to_open: false,
+            click_to_toggle: false,
             children: Vec::new(),
             suffix: None,
             disabled: false,
@@ -166,6 +169,16 @@ impl SidebarMenuItem {
         self
     }
 
+    /// Set whether clicking the menu item toggles the submenu.
+    ///
+    /// If click_to_open is `true`, this has no effect.
+    ///
+    /// Default is `false`.
+    pub fn click_to_toggle(mut self, click_to_toggle: bool) -> Self {
+        self.click_to_toggle = click_to_toggle;
+        self
+    }
+
     pub fn children(mut self, children: impl IntoIterator<Item = impl Into<Self>>) -> Self {
         self.children = children.into_iter().map(Into::into).collect();
         self
@@ -191,6 +204,10 @@ impl SidebarMenuItem {
 
     fn is_submenu(&self) -> bool {
         self.children.len() > 0
+    }
+
+    fn collapsed_tooltip(&self) -> Option<SharedString> {
+        (self.collapsed && self.icon.is_some()).then(|| self.label.clone())
     }
 
     /// Set the context menu for the menu item.
@@ -224,7 +241,9 @@ impl SidebarItem for SidebarMenuItem {
         cx: &mut App,
     ) -> impl IntoElement {
         let click_to_open = self.click_to_open;
+        let click_to_toggle = self.click_to_toggle;
         let default_open = self.default_open;
+        let collapsed_tooltip = self.collapsed_tooltip();
         let id = id.into();
         let is_submenu = self.is_submenu();
         let open_state = if is_submenu {
@@ -262,13 +281,13 @@ impl SidebarItem for SidebarMenuItem {
                     })
                     .when(is_active, |this| {
                         this.font_medium()
-                            .bg(cx.theme().sidebar_accent)
+                            .bg(cx.theme().tokens.sidebar_accent)
                             .text_color(cx.theme().sidebar_accent_foreground)
                     })
                     .when_some(self.icon.clone(), |this, icon| this.child(icon))
                     .when(is_collapsed, |this| {
                         this.justify_center().when(is_active, |this| {
-                            this.bg(cx.theme().sidebar_accent)
+                            this.bg(cx.theme().tokens.sidebar_accent)
                                 .text_color(cx.theme().sidebar_accent_foreground)
                         })
                     })
@@ -329,11 +348,26 @@ impl SidebarItem for SidebarMenuItem {
                                             cx.notify();
                                         });
                                     }
+                                } else if click_to_toggle {
+                                    if let Some(ref s) = open_state {
+                                        s.update(cx, |is_open: &mut bool, cx| {
+                                            *is_open = !*is_open;
+                                            cx.notify();
+                                        });
+                                    }
                                 }
-
                                 handler(ev, window, cx)
                             }
                         })
+                    })
+                    .map(|this| {
+                        if let Some(tooltip) = collapsed_tooltip {
+                            this.managed_tooltip_at(Placement::Right, move |window, cx| {
+                                Tooltip::new(tooltip.clone()).build(window, cx)
+                            })
+                        } else {
+                            this
+                        }
                     })
                     .map(|this| {
                         if let Some(context_menu) = self.context_menu {
@@ -362,5 +396,28 @@ impl SidebarItem for SidebarMenuItem {
                         })),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collapsed_icon_item_uses_label_as_tooltip() {
+        let item = SidebarMenuItem::new("Projects")
+            .icon(Icon::default())
+            .collapsed(true);
+
+        assert_eq!(item.collapsed_tooltip().as_deref(), Some("Projects"));
+    }
+
+    #[test]
+    fn expanded_or_iconless_item_has_no_collapsed_tooltip() {
+        let expanded = SidebarMenuItem::new("Projects").icon(Icon::default());
+        let iconless = SidebarMenuItem::new("Projects").collapsed(true);
+
+        assert!(expanded.collapsed_tooltip().is_none());
+        assert!(iconless.collapsed_tooltip().is_none());
     }
 }

@@ -1,3 +1,4 @@
+use once_cell::sync::Lazy;
 use serde::Deserialize;
 
 pub mod assets_index;
@@ -21,12 +22,21 @@ pub mod modification;
 pub mod modrinth;
 pub mod mrpack;
 pub mod pandora_update;
+pub mod quickplay;
 pub mod resourcepack;
 pub mod server_status;
 pub mod text_component;
 pub mod unique_bytes;
 pub mod version;
 pub mod version_manifest;
+
+pub static USER_AGENT: Lazy<String> = Lazy::new(|| {
+    if let Some(version) = option_env!("PANDORA_RELEASE_VERSION") {
+        format!("PandoraLauncher/{version} (https://github.com/Moulberry/PandoraLauncher)")
+    } else {
+        "PandoraLauncher/dev (https://github.com/Moulberry/PandoraLauncher)".to_string()
+    }
+});
 
 pub fn try_deserialize<'de, T, D>(deserializer: D) -> Result<T, D::Error>
 where

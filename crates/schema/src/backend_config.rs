@@ -4,17 +4,25 @@ use enumset::{EnumSet, EnumSetType};
 use serde::{Deserialize, Serialize};
 
 use crate::mcregistry::MCREGISTRY_DEFAULT_BASE_URL;
+use crate::instance::{
+    InstanceJvmBinaryConfiguration, InstanceJvmFlagsConfiguration, InstanceMemoryConfiguration,
+    is_default_jvm_binary_configuration, is_default_jvm_flags_configuration, is_default_memory_configuration,
+};
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct BackendConfig {
     #[serde(default, skip_serializing_if = "is_default_sync_targets", deserialize_with = "try_deserialize_sync_targets")]
     pub sync_targets: SyncTargets,
     #[serde(default, skip_serializing_if = "crate::skip_if_default", deserialize_with = "crate::try_deserialize")]
-    pub dont_open_game_output_when_launching: bool,
-    #[serde(default, skip_serializing_if = "crate::skip_if_default", deserialize_with = "crate::try_deserialize")]
     pub proxy: ProxyConfig,
     #[serde(default, skip_serializing_if = "is_default_mcregistry_config", deserialize_with = "try_deserialize_mcregistry_config")]
     pub mcregistry: McRegistryConfig,
+    #[serde(default, deserialize_with = "crate::try_deserialize", skip_serializing_if = "is_default_memory_configuration")]
+    pub memory: Option<InstanceMemoryConfiguration>,
+    #[serde(default, deserialize_with = "crate::try_deserialize", skip_serializing_if = "is_default_jvm_flags_configuration")]
+    pub jvm_flags: Option<InstanceJvmFlagsConfiguration>,
+    #[serde(default, deserialize_with = "crate::try_deserialize", skip_serializing_if = "is_default_jvm_binary_configuration")]
+    pub jvm_binary: Option<InstanceJvmBinaryConfiguration>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -68,6 +76,7 @@ where
     D: serde::Deserializer<'de>,
 {
     Ok(McRegistryConfig::deserialize(deserializer).unwrap_or_default())
+
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq)]

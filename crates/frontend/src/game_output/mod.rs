@@ -475,7 +475,7 @@ impl Element for GameOutputList {
                         }
 
                         let mut scroll_state = game_output.scroll_state.borrow_mut();
-                        scroll_state.bounds_y = bounds.size.height;
+                        scroll_state.bounds = bounds;
                         scroll_state.line_height = line_height;
                         scroll_state.lines = if let Some(item_state) = &game_output.item_state {
                             item_state.total_line_count
@@ -526,7 +526,7 @@ impl GameOutput {
             };
         }
 
-        let max_offset = (item_state.total_line_count * line_height - scroll_state.bounds_y).max(px(1.0));
+        let max_offset = (item_state.total_line_count * line_height - scroll_state.bounds.size.height).max(px(1.0));
 
         match &mut scroll_state.scrolling {
             GameOutputScrolling::Bottom => {
@@ -565,8 +565,8 @@ impl GameOutput {
                         let drag_pivot = active_drag.drag_pivot.min(Pixels::ZERO);
                         let real_pivot = active_drag.real_pivot.min(Pixels::ZERO);
                         let new_max_offset =
-                            (item_state.total_line_count * line_height - scroll_state.bounds_y).max(px(1.0));
-                        let old_max_offset = (active_drag.start_content_height - scroll_state.bounds_y).max(px(1.0));
+                            (item_state.total_line_count * line_height - scroll_state.bounds.size.height).max(px(1.0));
+                        let old_max_offset = (active_drag.start_content_height - scroll_state.bounds.size.height).max(px(1.0));
 
                         if offset < drag_pivot {
                             effective_offset = (offset - drag_pivot) / (-old_max_offset - drag_pivot)
@@ -638,7 +638,7 @@ impl GameOutput {
                     let render_offset = -(remainder_lines * line_height) + line_remainder + line_height - top_offset_for_inset;
 
                     if scroll_state.active_drag.is_some() {
-                        let mut remaining_lines = ((scroll_state.bounds_y - render_offset) / line_height) as usize + 1;
+                        let mut remaining_lines = ((scroll_state.bounds.size.height - render_offset) / line_height) as usize + 1;
                         let mut changed = false;
                         for item in item_state.items[item_index..].iter_mut() {
                             if item.skip {
@@ -732,25 +732,6 @@ fn paint_lines<'a, const REVERSE: bool>(
         );
 
         let line_count = lines.len().max(1);
-
-        /*
-        let item_bounds = Bounds {
-            origin: if REVERSE {
-                let mut item_origin = line_origin.clone();
-                item_origin.y -= (line_count - 1) * line_height;
-                item_origin
-            } else {
-                line_origin
-            },
-            size: Size::new(wrap_width, line_count * line_height),
-        };
-        let item_background_color = if item.index & 1 == 0 {
-            Hsla { h: 0.0, s: 0.0, l: 0.06, a: 0.5 }
-        } else {
-            Hsla { h: 0.0, s: 0.0, l: 0.12, a: 0.5 }
-        };
-        window.paint_quad(fill(item_bounds,item_background_color));
-        */
 
         let mut line_origin = text_origin;
         line_origin.x += *time_column_width + level_column_width;
@@ -866,7 +847,7 @@ struct ActiveDrag {
 struct GameOutputScrollState {
     lines: usize,
     line_height: Pixels,
-    bounds_y: Pixels,
+    bounds: Bounds<Pixels>,
     scrolling: GameOutputScrolling,
     active_drag: Option<ActiveDrag>,
 }
@@ -889,14 +870,14 @@ impl GameOutputScrollState {
     }
 
     pub fn max_scroll_amount(&self) -> Pixels {
-        (self.lines * self.line_height - self.bounds_y).max(Pixels::ZERO)
+        (self.lines * self.line_height - self.bounds.size.height).max(Pixels::ZERO)
     }
 
     pub fn offset(&self) -> Pixels {
         match self.scrolling {
             GameOutputScrolling::Bottom => {
                 let content_height = self.content_height_for_scrollbar();
-                -(content_height - self.bounds_y)
+                -(content_height - self.bounds.size.height)
             },
             GameOutputScrolling::Top { offset } => offset,
         }
@@ -905,7 +886,7 @@ impl GameOutputScrollState {
     pub fn set_offset(&mut self, new_offset: Pixels) {
         let content_height = self.content_height_for_scrollbar();
         let new_offset = new_offset.min(Pixels::ZERO);
-        let total_offset = -(content_height - self.bounds_y);
+        let total_offset = -(content_height - self.bounds.size.height);
 
         if new_offset < total_offset + self.line_height / 4.0 {
             self.scrolling = GameOutputScrolling::Bottom;
@@ -916,6 +897,11 @@ impl GameOutputScrollState {
 }
 
 impl ScrollbarHandle for ScrollHandler {
+    fn viewport_bounds(&self) -> Bounds<Pixels> {
+        let state = self.state.borrow();
+        state.bounds
+    }
+
     fn offset(&self) -> Point<Pixels> {
         let state = self.state.borrow();
         Point::new(Pixels::ZERO, state.offset())
@@ -982,7 +968,7 @@ impl GameOutputRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let InputEvent::PressEnter { secondary: false } = event else {
+        let InputEvent::PressEnter { secondary: false, shift: _ } = event else {
             return;
         };
 

@@ -18,6 +18,11 @@
 //!
 //! [caffeine-git]: https://github.com/ben-manes/caffeine
 //!
+//! **NOTE**:
+//! If you have any questions about Moka's APIs or internal design, you can ask the
+//! AI chatbot at DeepWiki in a natural language:
+//! <https://deepwiki.com/moka-rs/moka>
+//!
 //! # Features
 //!
 //! - Thread-safe, highly concurrent in-memory cache implementations:

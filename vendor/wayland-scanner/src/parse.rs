@@ -39,7 +39,7 @@ fn init_protocol<R: BufRead>(reader: &mut Reader<R>) -> Protocol {
     // Check two firsts lines for protocol tag
     for _ in 0..3 {
         match reader.read_event_into(&mut Vec::new()) {
-            Ok(Event::Decl(_) | Event::DocType(_)) => {
+            Ok(Event::Decl(_) | Event::DocType(_) | Event::Comment(_)) => {
                 continue;
             }
             Ok(Event::Start(bytes)) => {
@@ -86,7 +86,7 @@ fn parse_protocol<R: BufRead>(mut reader: Reader<R>) -> Protocol {
                                 Ok(Event::GeneralRef(byte_ref)) => {
                                     if let Ok(Some(c)) = byte_ref.resolve_char_ref() {
                                         copyright.push(c);
-                                    } else if let Ok(content) = byte_ref.xml_content() {
+                                    } else if let Ok(content) = byte_ref.xml10_content() {
                                         if let Some(s) =
                                             quick_xml::escape::resolve_xml_entity(&content)
                                         {

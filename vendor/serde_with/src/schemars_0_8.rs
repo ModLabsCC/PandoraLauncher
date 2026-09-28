@@ -138,6 +138,10 @@ where
     T: ?Sized,
     TA: JsonSchemaAs<T>,
 {
+    fn is_referenceable() -> bool {
+        TA::is_referenceable()
+    }
+
     fn schema_name() -> String {
         TA::schema_name()
     }
@@ -148,10 +152,6 @@ where
 
     fn json_schema(gen: &mut SchemaGenerator) -> Schema {
         TA::json_schema(gen)
-    }
-
-    fn is_referenceable() -> bool {
-        TA::is_referenceable()
     }
 }
 
@@ -312,6 +312,10 @@ impl<T, TA, const N: usize> JsonSchemaAs<[T; N]> for [TA; N]
 where
     TA: JsonSchemaAs<T>,
 {
+    fn is_referenceable() -> bool {
+        false
+    }
+
     fn schema_name() -> String {
         std::format!("[{}; {}]", <WrapSchema<T, TA>>::schema_name(), N)
     }
@@ -337,10 +341,6 @@ where
             ..Default::default()
         }
         .into()
-    }
-
-    fn is_referenceable() -> bool {
-        false
     }
 }
 
@@ -404,8 +404,61 @@ impl<T> JsonSchemaAs<T> for DisplayFromStr {
     forward_schema!(String);
 }
 
+#[cfg(feature = "base58")]
+impl<T, A: base58::Alphabet> JsonSchemaAs<T> for base58::Base58<A> {
+    fn is_referenceable() -> bool {
+        false
+    }
+
+    fn schema_name() -> String {
+        "Base58<A>".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        "serde_with::base58::Base58<A>".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            // no regex pattern here, since it varies depending on the alphabet
+            ..Default::default()
+        }
+        .into()
+    }
+}
+
+#[cfg(feature = "base64")]
+impl<T, A: base64::Alphabet, F: Format> JsonSchemaAs<T> for base64::Base64<A, F> {
+    fn is_referenceable() -> bool {
+        false
+    }
+
+    fn schema_name() -> String {
+        "Base64<A, F>".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        "serde_with::base64::Base64<A, F>".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            // See <https://json-schema.org/draft/2020-12/draft-bhutton-json-schema-validation-00#rfc.section.8.3>
+            extensions: [("contentEncoding".to_string(), serde_json::json!("base64"))].into(),
+            ..Default::default()
+        }
+        .into()
+    }
+}
+
 #[cfg(feature = "hex")]
-impl<T, F: formats::Format> JsonSchemaAs<T> for hex::Hex<F> {
+impl<T, F: Format> JsonSchemaAs<T> for hex::Hex<F> {
+    fn is_referenceable() -> bool {
+        false
+    }
+
     fn schema_name() -> String {
         "Hex<F>".into()
     }
@@ -427,13 +480,13 @@ impl<T, F: formats::Format> JsonSchemaAs<T> for hex::Hex<F> {
         }
         .into()
     }
-
-    fn is_referenceable() -> bool {
-        false
-    }
 }
 
 impl JsonSchemaAs<bool> for BoolFromInt<Strict> {
+    fn is_referenceable() -> bool {
+        false
+    }
+
     fn schema_name() -> String {
         "BoolFromInt<Strict>".into()
     }
@@ -454,13 +507,13 @@ impl JsonSchemaAs<bool> for BoolFromInt<Strict> {
         }
         .into()
     }
-
-    fn is_referenceable() -> bool {
-        false
-    }
 }
 
 impl JsonSchemaAs<bool> for BoolFromInt<Flexible> {
+    fn is_referenceable() -> bool {
+        false
+    }
+
     fn schema_name() -> String {
         "BoolFromInt<Flexible>".into()
     }
@@ -475,10 +528,6 @@ impl JsonSchemaAs<bool> for BoolFromInt<Flexible> {
             ..Default::default()
         }
         .into()
-    }
-
-    fn is_referenceable() -> bool {
-        false
     }
 }
 
@@ -495,6 +544,10 @@ impl<T> JsonSchemaAs<T> for Bytes {
 }
 
 impl JsonSchemaAs<Vec<u8>> for BytesOrString {
+    fn is_referenceable() -> bool {
+        false
+    }
+
     fn schema_name() -> String {
         "BytesOrString".into()
     }
@@ -523,10 +576,6 @@ impl JsonSchemaAs<Vec<u8>> for BytesOrString {
             ..Default::default()
         }
         .into()
-    }
-
-    fn is_referenceable() -> bool {
-        false
     }
 }
 
@@ -599,6 +648,10 @@ impl<T> JsonSchemaAs<Vec<T>> for EnumMap
 where
     T: JsonSchema,
 {
+    fn is_referenceable() -> bool {
+        true
+    }
+
     fn schema_name() -> String {
         std::format!("EnumMap({})", T::schema_name())
     }
@@ -632,16 +685,12 @@ where
         let properties = &mut object.object().properties;
         for schema in one_of {
             if let Some(object) = schema.into_object().object {
-                properties.extend(object.properties.into_iter());
+                properties.extend(object.properties);
             }
         }
 
         object.object().additional_properties = Some(Box::new(Schema::Bool(false)));
         object.into()
-    }
-
-    fn is_referenceable() -> bool {
-        true
     }
 }
 
@@ -790,6 +839,10 @@ impl<T, TA> JsonSchemaAs<Vec<T>> for KeyValueMap<TA>
 where
     TA: JsonSchemaAs<T>,
 {
+    fn is_referenceable() -> bool {
+        true
+    }
+
     fn schema_name() -> String {
         std::format!("KeyValueMap({})", <WrapSchema<T, TA>>::schema_name())
     }
@@ -815,10 +868,6 @@ where
             ..Default::default()
         }
         .into()
-    }
-
-    fn is_referenceable() -> bool {
-        true
     }
 }
 
@@ -855,6 +904,8 @@ map_first_last_wins_schema!(=> S hashbrown_0_14::HashMap<K, V, S>);
 map_first_last_wins_schema!(=> S hashbrown_0_15::HashMap<K, V, S>);
 #[cfg(feature = "hashbrown_0_16")]
 map_first_last_wins_schema!(=> S hashbrown_0_16::HashMap<K, V, S>);
+#[cfg(feature = "hashbrown_0_17")]
+map_first_last_wins_schema!(=> S hashbrown_0_17::HashMap<K, V, S>);
 #[cfg(feature = "indexmap_1")]
 map_first_last_wins_schema!(=> S indexmap_1::IndexMap<K, V, S>);
 #[cfg(feature = "indexmap_2")]
@@ -1083,6 +1134,8 @@ map_first_last_wins_schema!(=> S hashbrown_0_14::HashSet<V, S>);
 map_first_last_wins_schema!(=> S hashbrown_0_15::HashSet<V, S>);
 #[cfg(feature = "hashbrown_0_16")]
 map_first_last_wins_schema!(=> S hashbrown_0_16::HashSet<V, S>);
+#[cfg(feature = "hashbrown_0_17")]
+map_first_last_wins_schema!(=> S hashbrown_0_17::HashSet<V, S>);
 #[cfg(feature = "indexmap_1")]
 map_first_last_wins_schema!(=> S indexmap_1::IndexSet<V, S>);
 #[cfg(feature = "indexmap_2")]
@@ -1181,6 +1234,15 @@ mod timespan {
     #[cfg(feature = "chrono_0_4")]
     declare_timespan_target!(::chrono_0_4::NaiveDateTime { i64, f64, String });
 
+    #[cfg(feature = "jiff_0_2")]
+    declare_timespan_target!(::jiff_0_2::SignedDuration { i64, f64, String });
+    #[cfg(feature = "jiff_0_2")]
+    declare_timespan_target!(::jiff_0_2::Timestamp { i64, f64, String });
+    #[cfg(feature = "jiff_0_2")]
+    declare_timespan_target!(::jiff_0_2::Zoned { i64, f64, String });
+    #[cfg(feature = "jiff_0_2")]
+    declare_timespan_target!(::jiff_0_2::civil::DateTime { i64, f64, String });
+
     #[cfg(feature = "time_0_3")]
     declare_timespan_target!(::time_0_3::Duration { i64, f64, String });
     #[cfg(feature = "time_0_3")]
@@ -1267,6 +1329,10 @@ where
     T: TimespanSchemaTarget<F>,
     F: Format + JsonSchema,
 {
+    fn is_referenceable() -> bool {
+        false
+    }
+
     fn schema_name() -> String {
         <T as TimespanSchemaTarget<F>>::TYPE
             .schema_id()
@@ -1282,10 +1348,6 @@ where
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         <T as TimespanSchemaTarget<F>>::TYPE
             .into_flexible_schema(<T as TimespanSchemaTarget<F>>::SIGNED)
-    }
-
-    fn is_referenceable() -> bool {
-        false
     }
 }
 
@@ -1332,4 +1394,29 @@ forward_duration_schema!(TimestampNanoSecondsWithFrac);
 #[cfg(feature = "json")]
 impl<T> JsonSchemaAs<T> for json::JsonString {
     forward_schema!(String);
+}
+
+macro_rules! none_as_zero {
+    ($($nonzero:ident => $primitive:ident),* $(,)?) => {
+        $(
+            impl JsonSchemaAs<Option<core::num::$nonzero>> for NoneAsZero {
+                forward_schema!($primitive);
+            }
+        )*
+    };
+}
+
+none_as_zero! {
+    NonZeroU8    => u8,
+    NonZeroU16   => u16,
+    NonZeroU32   => u32,
+    NonZeroU64   => u64,
+    NonZeroU128  => u128,
+    NonZeroUsize => usize,
+    NonZeroI8    => i8,
+    NonZeroI16   => i16,
+    NonZeroI32   => i32,
+    NonZeroI64   => i64,
+    NonZeroI128  => i128,
+    NonZeroIsize => isize,
 }

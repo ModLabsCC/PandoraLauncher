@@ -33,6 +33,14 @@ else()
     add_custom_target(aws_lc_sys ALL DEPENDS crypto)
 endif()
 
+# The aws-lc Windows FIPS shared-library build may define a fips_integrity
+# target that patches the correct integrity hash into crypto.dll after it is
+# linked. Because aws-lc is added with EXCLUDE_FROM_ALL, that target would not
+# be part of this project's ALL target and would otherwise never be built.
+if (FIPS AND TARGET fips_integrity)
+    add_dependencies(aws_lc_sys fips_integrity)
+endif()
+
 set(FINAL_ARTIFACTS_DIRECTORY ${CMAKE_BINARY_DIR}/artifacts)
 
 # Places the compiled library files at the root of the binary directory so we can have a consistent
@@ -55,11 +63,14 @@ endforeach ()
 if (BORINGSSL_PREFIX)
     if (MSVC)
         set(TARGET_PREFIX "${BORINGSSL_PREFIX}")
-        set_my_target_properties(IMPORT_PREFIX ${TARGET_PREFIX})
     else()
         set(TARGET_PREFIX "lib${BORINGSSL_PREFIX}")
     endif()
+    # PREFIX renames the library itself; IMPORT_PREFIX renames the import
+    # library produced for shared builds on DLL platforms (MinGW's lib*.dll.a),
+    # keeping it discoverable under the prefixed name. Ignored elsewhere.
     set_my_target_properties(PREFIX ${TARGET_PREFIX})
+    set_my_target_properties(IMPORT_PREFIX ${TARGET_PREFIX})
 
     # This BORINGSSL_PREFIX has an "_" appended, so we must remove it
     string(REGEX REPLACE "_$" "" BORINGSSL_PREFIX_MACRO ${BORINGSSL_PREFIX})

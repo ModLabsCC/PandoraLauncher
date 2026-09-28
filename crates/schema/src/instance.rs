@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use ustr::Ustr;
 use uuid::Uuid;
 
-use crate::{fabric_loader_manifest::FabricLoaderManifest, forge::{ForgeMavenManifest, NeoforgeMavenManifest, VersionFragment}, loader::Loader};
+use crate::{curseforge::CurseforgeReleaseType, fabric_loader_manifest::FabricLoaderManifest, forge::{ForgeMavenManifest, NeoforgeMavenManifest, VersionFragment}, loader::Loader, modrinth::ModrinthVersionType};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InstanceConfiguration {
@@ -13,6 +13,8 @@ pub struct InstanceConfiguration {
     pub loader: Loader,
     #[serde(default, skip_serializing_if = "crate::skip_if_none")]
     pub preferred_loader_version: Option<Ustr>,
+    #[serde(default, deserialize_with = "crate::try_deserialize")]
+    pub update_channel: UpdateChannel,
     #[serde(default, deserialize_with = "crate::try_deserialize", skip_serializing_if = "crate::skip_if_none")]
     pub preferred_account: Option<Uuid>,
     #[serde(default, deserialize_with = "crate::try_deserialize", skip_serializing_if = "is_default_memory_configuration")]
@@ -35,6 +37,8 @@ pub struct InstanceConfiguration {
     pub show_shader_tab: bool,
     #[serde(default, deserialize_with = "crate::try_deserialize")]
     pub sandbox: bool, // Default sandbox to false when loading old configuration json
+    #[serde(default, skip_serializing_if = "crate::skip_if_none", deserialize_with = "crate::try_deserialize")]
+    pub group: Option<Arc<str>>,
 }
 
 impl InstanceConfiguration {
@@ -43,6 +47,7 @@ impl InstanceConfiguration {
             minecraft_version,
             loader,
             preferred_loader_version: None,
+            update_channel: UpdateChannel::default(),
             preferred_account: None,
             memory: None,
             wrapper_command: None,
@@ -54,6 +59,7 @@ impl InstanceConfiguration {
             disable_file_syncing: false,
             show_shader_tab: false,
             sandbox: false,  // todo: for now, off by default. In the future, turn this on by default
+            group: None,
         }
     }
 }
@@ -136,6 +142,33 @@ impl InstanceConfiguration {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    #[default]
+    Release,
+    Beta,
+    Alpha,
+}
+
+impl UpdateChannel {
+    pub fn modrinth_version_types_with_fallback(self) -> &'static [&'static [ModrinthVersionType]] {
+        match self {
+            Self::Release => &[&[ModrinthVersionType::Release], &[ModrinthVersionType::Beta], &[ModrinthVersionType::Alpha]],
+            Self::Beta => &[&[ModrinthVersionType::Release, ModrinthVersionType::Beta], &[ModrinthVersionType::Alpha]],
+            Self::Alpha => &[&[ModrinthVersionType::Release, ModrinthVersionType::Beta, ModrinthVersionType::Alpha]],
+        }
+    }
+
+    pub fn curseforge_release_types_with_fallback(self) -> &'static [&'static [CurseforgeReleaseType]] {
+        match self {
+            Self::Release => &[&[CurseforgeReleaseType::Release], &[CurseforgeReleaseType::Beta], &[CurseforgeReleaseType::Alpha]],
+            Self::Beta => &[&[CurseforgeReleaseType::Release, CurseforgeReleaseType::Beta], &[CurseforgeReleaseType::Alpha]],
+            Self::Alpha => &[&[CurseforgeReleaseType::Release, CurseforgeReleaseType::Beta, CurseforgeReleaseType::Alpha]],
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub struct InstanceMemoryConfiguration {
     pub enabled: bool,
@@ -158,7 +191,7 @@ impl Default for InstanceMemoryConfiguration {
     }
 }
 
-fn is_default_memory_configuration(config: &Option<InstanceMemoryConfiguration>) -> bool {
+pub fn is_default_memory_configuration(config: &Option<InstanceMemoryConfiguration>) -> bool {
     if let Some(config) = config {
         !config.enabled
             && config.min == InstanceMemoryConfiguration::DEFAULT_MIN
@@ -188,7 +221,7 @@ pub struct InstanceJvmFlagsConfiguration {
     pub flags: Arc<str>,
 }
 
-fn is_default_jvm_flags_configuration(config: &Option<InstanceJvmFlagsConfiguration>) -> bool {
+pub fn is_default_jvm_flags_configuration(config: &Option<InstanceJvmFlagsConfiguration>) -> bool {
     if let Some(config) = config {
         !config.enabled && config.flags.trim_ascii().is_empty()
     } else {
@@ -202,7 +235,7 @@ pub struct InstanceJvmBinaryConfiguration {
     pub path: Option<Arc<Path>>,
 }
 
-fn is_default_jvm_binary_configuration(config: &Option<InstanceJvmBinaryConfiguration>) -> bool {
+pub fn is_default_jvm_binary_configuration(config: &Option<InstanceJvmBinaryConfiguration>) -> bool {
     if let Some(config) = config {
         !config.enabled && config.path.is_none()
     } else {

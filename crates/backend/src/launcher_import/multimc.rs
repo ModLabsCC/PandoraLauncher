@@ -1,7 +1,7 @@
 use std::{path::{Path, PathBuf}, sync::Arc};
 
 use auth::{credentials::AccountCredentials, models::{TokenWithExpiry, XstsToken}, secret::PlatformSecretStorage};
-use bridge::{import::ImportFromOtherLauncherJob, modal_action::{ModalAction, ProgressTracker}};
+use bridge::{import::ImportFromOtherLauncherJob, modal_action::ModalAction};
 use chrono::DateTime;
 use schema::{instance::{InstanceConfiguration, LwjglLibraryPath}, loader::Loader};
 use serde::Deserialize;
@@ -261,6 +261,7 @@ struct MultiMCAccountTokenExtra {
 pub async fn import_from_multimc(backend: &BackendState, import_job: ImportFromOtherLauncherJob, modal_action: ModalAction) {
     import_accounts_from_multimc(backend, &import_job, &modal_action).await;
     import_instances_from_multimc(backend, &import_job, &modal_action);
+    modal_action.set_finished();
 }
 
 async fn import_accounts_from_multimc(backend: &BackendState, import_job: &ImportFromOtherLauncherJob, modal_action: &ModalAction) {
@@ -268,9 +269,8 @@ async fn import_accounts_from_multimc(backend: &BackendState, import_job: &Impor
         return;
     }
 
-    let tracker = ProgressTracker::new("Reading accounts.json".into(), backend.send.clone());
-    modal_action.trackers.push(tracker.clone());
-    tracker.notify();
+    let tracker = modal_action.push_tracker("Reading accounts.json".into());
+    tracker.set_total(1);
 
     let accounts_path = import_job.root.join("accounts.json");
     let Ok(accounts_bytes) = std::fs::read(&accounts_path) else {
@@ -289,8 +289,10 @@ async fn import_accounts_from_multimc(backend: &BackendState, import_job: &Impor
         }
     };
 
+    tracker.set_count(1);
+
     let num_accounts = accounts_json.accounts.len();
-    tracker.set_title("Importing accounts".into());
+    let tracker = modal_action.push_tracker("Importing accounts".into());
     tracker.add_total(num_accounts);
 
     backend.account_info.write().modify(|accounts| {
@@ -302,7 +304,6 @@ async fn import_accounts_from_multimc(backend: &BackendState, import_job: &Impor
                     };
 
                     tracker.add_count(1);
-                    tracker.notify();
 
                     if let Some(account) = accounts.accounts.get_mut(&profile.id) {
                         account.offline = false;
@@ -323,10 +324,8 @@ async fn import_accounts_from_multimc(backend: &BackendState, import_job: &Impor
         }
     });
 
-    tracker.set_title("Importing credentials".into());
-    tracker.set_count(0);
+    let tracker = modal_action.push_tracker("Importing credentials".into());
     tracker.set_total(num_accounts);
-    tracker.notify();
 
     for account in accounts_json.accounts {
         if let MultiMCAccount::MSA { active: _, profile, msa_client_id, msa, utoken, xrp_mc, ygg } = account {
@@ -394,7 +393,6 @@ async fn import_accounts_from_multimc(backend: &BackendState, import_job: &Impor
 
     tracker.set_count(num_accounts);
     tracker.set_finished(bridge::modal_action::ProgressTrackerFinishType::Normal);
-    tracker.notify();
 }
 
 struct MultiMCInstanceToImport {
@@ -409,9 +407,7 @@ fn import_instances_from_multimc(backend: &BackendState, import_job: &ImportFrom
         return;
     }
 
-    let all_tracker = ProgressTracker::new("Importing instances".into(), backend.send.clone());
-    modal_action.trackers.push(all_tracker.clone());
-    all_tracker.notify();
+    let all_tracker = modal_action.push_tracker("Importing instances".into());
 
     let mut to_import = Vec::new();
 
@@ -447,18 +443,14 @@ fn import_instances_from_multimc(backend: &BackendState, import_job: &ImportFrom
 
     for to_import in to_import {
         let title = format!("Importing {}", to_import.folder.file_name().unwrap().to_string_lossy());
-        let tracker = ProgressTracker::new(title.into(), backend.send.clone());
-        modal_action.trackers.push(tracker.clone());
-        tracker.notify();
+        let tracker = modal_action.push_tracker(title.into());
 
         let Some((configuration, stats)) = try_load_from_multimc(&to_import.multimc_instance_cfg, &to_import.multimc_mmc_pack) else {
             tracker.set_finished(bridge::modal_action::ProgressTrackerFinishType::Error);
-            tracker.notify();
             continue;
         };
         let Ok(configuration_bytes) = serde_json::to_vec(&configuration) else {
             tracker.set_finished(bridge::modal_action::ProgressTrackerFinishType::Error);
-            tracker.notify();
             continue;
         };
 
@@ -470,42 +462,37 @@ fn import_instances_from_multimc(backend: &BackendState, import_job: &ImportFrom
         let target_dot_minecraft = to_import.pandora_path.join(".minecraft");
         if mmc_minecraft.exists() {
             _ = std::fs::create_dir_all(&target_dot_minecraft);
-            _ = crate::copy_content_recursive(&mmc_minecraft, &target_dot_minecraft, false, &|copied, total| {
+            _ = crate::fs::copy_content_recursive(&mmc_minecraft, &target_dot_minecraft, false, &|copied, total| {
                 tracker.set_total(total as usize);
                 tracker.set_count(copied as usize);
-                tracker.notify();
             });
         } else if mmc_dot_minecraft.exists() {
             _ = std::fs::create_dir_all(&target_dot_minecraft);
-            _ = crate::copy_content_recursive(&mmc_dot_minecraft, &target_dot_minecraft, false, &|copied, total| {
+            _ = crate::fs::copy_content_recursive(&mmc_dot_minecraft, &target_dot_minecraft, false, &|copied, total| {
                 tracker.set_total(total as usize);
                 tracker.set_count(copied as usize);
-                tracker.notify();
             });
         }
 
         // Copy icon
-        _ = std::fs::copy(to_import.folder.join("icon.png"), to_import.pandora_path.join("icon.png"));
+        _ = crate::fs::fastcopy(&to_import.folder.join("icon.png"), &to_import.pandora_path.join("icon.png"), true, false);
 
         // Write info_v1.json
         let info_path = to_import.pandora_path.join("info_v1.json");
-        _ = crate::write_safe(&info_path, &configuration_bytes);
+        _ = crate::fs::write_safe(&info_path, &configuration_bytes);
 
         // Write stats_v1.json if we have some stats
         if stats != InstanceStats::default() {
             let stats_path = to_import.pandora_path.join("stats_v1.json");
             if let Ok(stats_bytes) = serde_json::to_vec(&stats) {
-                _ = crate::write_safe(&stats_path, &stats_bytes);
+                _ = crate::fs::write_safe(&stats_path, &stats_bytes);
             }
         }
 
         all_tracker.add_count(1);
-        all_tracker.notify();
 
         tracker.set_finished(bridge::modal_action::ProgressTrackerFinishType::Fast);
-        tracker.notify();
     }
 
     all_tracker.set_finished(bridge::modal_action::ProgressTrackerFinishType::Normal);
-    all_tracker.notify();
 }

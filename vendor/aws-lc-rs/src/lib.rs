@@ -56,7 +56,7 @@
 //! accredited lab and has been submitted to NIST for certification. This will continue to be the
 //! case as we periodically submit new versions of the AWS-LC-FIPS module to NIST for certification.
 //! Currently, aws-lc-fips-sys binds to
-//! [AWS-LC-FIPS 3.0.x](https://github.com/aws/aws-lc/tree/fips-2024-09-27).
+//! [AWS-LC-FIPS 4.x](https://github.com/aws/aws-lc/tree/fips-2025-09-12-lts).
 //!
 //! Consult with your local FIPS compliance team to determine the version of AWS-LC-FIPS module that you require. Consumers
 //! needing to remain on a previous version of the AWS-LC-FIPS module should pin to specific versions of aws-lc-rs to avoid
@@ -67,7 +67,8 @@
 //! | AWS-LC-FIPS module | aws-lc-rs |
 //! |--------------------|-----------|
 //! | 2.0.x              | \<1.12.0  |
-//! | 3.0.x              | *latest*  |
+//! | 3.0.x              | \<1.18.0  |
+//! | 4.x                | *latest*  |
 //!
 //! Refer to the
 //! [NIST Cryptographic Module Validation Program's Modules In Progress List](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/Modules-In-Process-List)
@@ -89,6 +90,22 @@
 //! ["Address Sanitizer" section](https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html#addresssanitizer)
 //! of the [Rust Unstable Book](https://doc.rust-lang.org/beta/unstable-book/).
 //!
+//! **Preferred alternative:** Instead of the `asan` feature flag, you can set the
+//! `AWS_LC_SYS_SANITIZER` environment variable (or `AWS_LC_FIPS_SYS_SANITIZER` for FIPS builds)
+//! to one of: `asan`, `msan`, `tsan`. This approach does not require forwarding a feature through
+//! the dependency graph and also supports MemorySanitizer and ThreadSanitizer.
+//! MSAN and TSAN require the standard library to be rebuilt with sanitizer instrumentation, so
+//! you must install the `rust-src` component and pass `-Zbuild-std` to Cargo. For example:
+//!
+//! ```bash
+//! rustup component add rust-src --toolchain nightly
+//! AWS_LC_SYS_SANITIZER=msan RUSTFLAGS="-Zsanitizer=memory -Zsanitizer-memory-track-origins" \
+//!     cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu
+//! ```
+//!
+//! **Note:** MSAN is not currently supported for FIPS builds due to a missing preprocessor guard
+//! in the upstream AWS-LC `bcm.c` integrity check.
+//!
 //! #### bindgen
 //!
 //! Causes `aws-lc-sys` or `aws-lc-fips-sys` to generates fresh bindings for AWS-LC instead of using
@@ -107,6 +124,61 @@
 //!
 //! Be aware that [features are additive](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification);
 //! by enabling this feature, it is enabled for all crates within the same build.
+//!
+//! #### dev-tests-only
+//!
+//! Enables the `rand::unsealed` module, which re-exports the normally sealed `SecureRandom` trait.
+//! This allows consumers to provide their own implementations of `SecureRandom` (e.g., a
+//! deterministic RNG) for testing purposes. When enabled, a `mut_fill` method is also available on
+//! `SecureRandom`.
+//!
+//! This feature is restricted to **dev/debug profile builds only** — attempting to use it in a
+//! release build will result in a compile-time error.
+//!
+//! It can be enabled in two ways:
+//! * **Feature flag:** `cargo test --features dev-tests-only`
+//! * **Environment variable:** `AWS_LC_RS_DEV_TESTS_ONLY=1 cargo test`
+//!
+//! **⚠️ Warning:** This feature is intended **only** for development and testing. It must not be
+//! used in production builds. The `rand::unsealed` module and `mut_fill` method are not part of the
+//! stable public API and may change without notice.
+//!
+//! #### legacy-des
+//!
+//! Enables single DES and Triple DES as opt-in symmetric ciphers under the
+//! [`cipher`] module, exposing `DES_FOR_LEGACY_USE_ONLY` (single DES),
+//! `DES_EDE_FOR_LEGACY_USE_ONLY` (2-key Triple DES) and
+//! `DES_EDE3_FOR_LEGACY_USE_ONLY` (3-key Triple DES), together with the
+//! supporting key-length and IV-length constants. Only CBC and ECB operating
+//! modes are supported.
+//!
+//! **⚠️ Warning:** Single DES and Triple DES are legacy algorithms. Single DES
+//! provides only 56 bits of effective security and has been considered insecure
+//! for decades. Triple DES has been disallowed for encryption by
+//! [NIST SP 800-131A Rev. 2](https://csrc.nist.gov/publications/detail/sp/800-131a/rev-2/final):
+//! 2-key Triple DES after 2015, and 3-key Triple DES after 2023. This feature
+//! exists solely to support interoperability. All exposed items are marked
+//! `#[deprecated]` so that any use site produces a compiler warning. **Do not
+//! use single DES or Triple DES in new designs.** If you only need
+//! confidentiality, prefer AES-GCM or another AEAD from the [`aead`] module;
+//! if you specifically need a block cipher, prefer one of the AES algorithms
+//! in [`cipher`].
+//!
+//! **Build-time impact:** The default `aws-lc-sys` bindings do not expose the
+//! low-level `DES_*` symbols this feature relies on, so enabling `legacy-des`
+//! also enables `aws-lc-sys?/all-bindings`. Concretely:
+//!
+//! * On platforms with pre-generated per-target bindings, the build switches
+//!   from the universal bindings to the per-target bindings (no extra
+//!   tooling required).
+//! * On platforms *without* pre-generated bindings for the selected target,
+//!   `bindgen` is invoked at build time, which requires `libclang` to be
+//!   installed in the build environment.
+//!
+//! Because [features are
+//! additive](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification),
+//! enabling `legacy-des` anywhere in your dependency graph applies the
+//! above to the entire build.
 //!
 //! # Use of prebuilt NASM objects
 //!
@@ -209,7 +281,6 @@ pub mod iv;
 pub mod kdf;
 #[allow(clippy::module_name_repetitions)]
 pub mod kem;
-#[cfg(all(feature = "unstable", not(feature = "fips")))]
 mod pqdsa;
 mod ptr;
 pub mod rsa;
@@ -222,8 +293,8 @@ pub(crate) use debug::derive_debug_via_id;
 use std::ffi::CStr;
 
 use crate::aws_lc::{
-    CRYPTO_library_init, ERR_error_string, ERR_get_error, FIPS_mode, ERR_GET_FUNC, ERR_GET_LIB,
-    ERR_GET_REASON,
+    CRYPTO_library_init, ERR_error_string, ERR_get_error, FIPS_mode, OpenSSL_version, ERR_GET_FUNC,
+    ERR_GET_LIB, ERR_GET_REASON, OPENSSL_VERSION,
 };
 use std::sync::Once;
 
@@ -258,6 +329,40 @@ pub fn try_fips_mode() -> Result<(), &'static str> {
     }
 }
 
+/// The version number of the linked AWS-LC library (e.g. `"5.1.0"`).
+///
+/// This identifies the exact release you are running against. For FIPS builds it
+/// can disambiguate builds that share a FIPS module number, but it must not be
+/// used to infer FIPS certification status directly.
+///
+/// # Panics
+/// Panics if AWS-LC returns a version string that is not valid UTF-8.
+#[must_use]
+pub fn awslc_version() -> &'static str {
+    init();
+    let full = unsafe { CStr::from_ptr(OpenSSL_version(OPENSSL_VERSION)) }
+        .to_str()
+        .expect("AWS-LC version string is not valid UTF-8");
+    // "AWS-LC 5.1.0" / "AWS-LC FIPS 3.4.0" -> the trailing version token.
+    full.rsplit_once(' ').map_or(full, |(_, version)| version)
+}
+
+/// The FIPS module version this build corresponds to, or `None` if the build
+/// does not correspond to an AWS-LC FIPS release branch.
+///
+/// Unlike [`awslc_version()`], this is a build-time constant resolved from
+/// the AWS-LC headers; the library linked at runtime is not consulted. It is
+/// also not equivalent to [`try_fips_mode()`] and does not by itself imply
+/// FIPS certification status. Returns `None` when the system-library version
+/// check is skipped.
+// TODO: Resolve at runtime via the `FIPS_version()` C API once
+// aws-lc-fips-sys tracks a FIPS 5+ branch.
+#[must_use]
+pub fn fips_version() -> Option<u32> {
+    let version = aws_lc::fips_version();
+    (version != 0).then_some(version)
+}
+
 #[cfg(feature = "fips")]
 /// Panics if the underlying implementation is not using CPU jitter entropy, otherwise it returns.
 ///
@@ -273,15 +378,6 @@ pub fn fips_cpu_jitter_entropy() {
 /// Return an error if the underlying implementation is not using CPU jitter entropy, otherwise Ok.
 pub fn try_fips_cpu_jitter_entropy() -> Result<(), &'static str> {
     init();
-    // TODO: Delete once FIPS_is_entropy_cpu_jitter() available on FIPS branch
-    // https://github.com/aws/aws-lc/pull/2088
-    #[cfg(feature = "fips")]
-    if aws_lc::CFG_CPU_JITTER_ENTROPY() {
-        Ok(())
-    } else {
-        Err("FIPS CPU Jitter Entropy not enabled!")
-    }
-    #[cfg(not(feature = "fips"))]
     match unsafe { aws_lc::FIPS_is_entropy_cpu_jitter() } {
         1 => Ok(()),
         _ => Err("FIPS CPU Jitter Entropy not enabled!"),
@@ -349,5 +445,29 @@ mod tests {
         if aws_lc::CFG_CPU_JITTER_ENTROPY() {
             crate::fips_cpu_jitter_entropy();
         }
+    }
+
+    #[test]
+    fn test_awslc_version() {
+        let version = crate::awslc_version();
+        let major = version
+            .split('.')
+            .next()
+            .and_then(|major| major.parse::<u32>().ok())
+            .expect("AWS-LC version should start with a numeric major version");
+        assert!(major > 0);
+    }
+
+    #[cfg(not(feature = "fips"))]
+    #[test]
+    fn test_fips_version() {
+        assert_eq!(crate::fips_version(), None);
+    }
+
+    #[cfg(feature = "fips")]
+    #[test]
+    fn test_fips_version() {
+        // Module versions are monotonic across FIPS branches; the pinned branch is 4.
+        assert!(crate::fips_version().unwrap() >= 4);
     }
 }

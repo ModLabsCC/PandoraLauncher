@@ -5,8 +5,8 @@ use std::{
 use schema::{
     backend_config::{BackendConfig, McRegistryConfig, ProxyConfig}, instance::{
         InstanceConfiguration, InstanceJvmBinaryConfiguration, InstanceJvmFlagsConfiguration,
-        InstanceLinuxWrapperConfiguration, InstanceMemoryConfiguration, InstanceSystemLibrariesConfiguration, InstanceWrapperCommandConfiguration,
-    }, loader::Loader, minecraft_profile::{MinecraftProfileCape, SkinVariant}, pandora_update::UpdatePrompt, unique_bytes::UniqueBytes
+        InstanceLinuxWrapperConfiguration, InstanceMemoryConfiguration, InstanceSystemLibrariesConfiguration, InstanceWrapperCommandConfiguration, UpdateChannel,
+    }, loader::Loader, minecraft_profile::{MinecraftProfileCape, SkinVariant}, pandora_update::UpdatePrompt, quickplay::QuickplayPreset, unique_bytes::UniqueBytes
 };
 use ustr::Ustr;
 use uuid::Uuid;
@@ -14,15 +14,8 @@ use uuid::Uuid;
 use crate::{
     account::Account, game_output::GameOutputLogLevel, import::{ImportFromOtherLauncherJob, OtherLauncher}, install::ContentInstall, instance::{
         ContentFolder, InstanceContentID, InstanceContentSummary, InstanceID, InstancePlaytime, InstanceServerSummary, InstanceStatus, InstanceWorldSummary
-    }, keep_alive::KeepAliveHandle, meta::{MetadataRequest, MetadataResult}, modal_action::ModalAction,
+    }, manual_download::{ManualCurseforgeDownloadRequest}, meta::{MetadataRequest, MetadataResult}, modal_action::ModalAction, notify_signal::KeepAliveNotifySignalHandle,
 };
-
-#[derive(Debug)]
-#[derive(Default)]
-pub struct BackendConfigWithPassword {
-    pub config: BackendConfig,
-    pub proxy_password: Option<String>,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
@@ -76,6 +69,11 @@ pub enum MessageToBackend {
     DeleteInstance {
         id: InstanceID,
     },
+    DuplicateInstance {
+        id: InstanceID,
+        name: Ustr,
+        modal_action: ModalAction,
+    },
     ExportInstance {
         id: InstanceID,
         format: ExportFormat,
@@ -94,6 +92,10 @@ pub enum MessageToBackend {
     SetInstanceLoader {
         id: InstanceID,
         loader: Loader
+    },
+    SetInstanceUpdateChannel {
+        id: InstanceID,
+        update_channel: UpdateChannel,
     },
     SetInstancePreferredAccount {
     	id: InstanceID,
@@ -149,6 +151,14 @@ pub enum MessageToBackend {
     StartInstance {
         id: InstanceID,
         quick_play: Option<QuickPlayLaunch>,
+        live_game_output: Option<tokio::sync::oneshot::Sender<tokio::sync::mpsc::UnboundedReceiver<GameOutputMsg>>>,
+        modal_action: ModalAction,
+    },
+    StartQuickplayInstance {
+        preset: QuickplayPreset,
+        minecraft_version: Ustr,
+        quick_play: Option<QuickPlayLaunch>,
+        live_game_output: Option<tokio::sync::oneshot::Sender<tokio::sync::mpsc::UnboundedReceiver<GameOutputMsg>>>,
         modal_action: ModalAction,
     },
     RequestLoadWorlds {
@@ -207,6 +217,11 @@ pub enum MessageToBackend {
         content_id: InstanceContentID,
         modal_action: ModalAction,
     },
+    UnzipModpack {
+        id: InstanceID,
+        content_id: InstanceContentID,
+        modal_action: ModalAction,
+    },
     Sleep5s,
     ReadLog {
         path: Arc<Path>,
@@ -225,7 +240,12 @@ pub enum MessageToBackend {
         channel: tokio::sync::oneshot::Sender<SyncState>,
     },
     GetBackendConfiguration {
-        channel: tokio::sync::oneshot::Sender<BackendConfigWithPassword>,
+        channel: tokio::sync::oneshot::Sender<BackendConfig>,
+    },
+    SetLaunchDefaults {
+        memory: Option<InstanceMemoryConfiguration>,
+        jvm_flags: Option<InstanceJvmFlagsConfiguration>,
+        jvm_binary: Option<InstanceJvmBinaryConfiguration>,
     },
     SetSyncing {
         target: Arc<str>,
@@ -256,12 +276,11 @@ pub enum MessageToBackend {
         from_index: usize,
         delta: isize,
     },
-    SetOpenGameOutputAfterLaunching {
-        value: bool,
-    },
     SetProxyConfiguration {
         config: ProxyConfig,
-        password: Option<String>,
+    },
+    SetProxyPassword {
+        password: String,
     },
     SetMcRegistryConfiguration {
         config: McRegistryConfig,
@@ -315,6 +334,10 @@ pub enum MessageToBackend {
         modal_action: ModalAction,
     },
     Quit,
+    MoveInstanceToGroup {
+        instance_id: InstanceID,
+        group: Arc<str>
+    },
 }
 
 #[derive(Debug)]
@@ -361,9 +384,6 @@ pub enum MessageToFrontend {
         content_folder: ContentFolder,
         content: Arc<[InstanceContentSummary]>,
     },
-    CreateGameOutputWindow {
-        receiver: tokio::sync::mpsc::UnboundedReceiver<GameOutputMsg>
-    },
     AddNotification {
         notification_type: BridgeNotificationType,
         message: Arc<str>,
@@ -381,7 +401,7 @@ pub enum MessageToFrontend {
     MetadataResult {
         request: MetadataRequest,
         result: Result<MetadataResult, Arc<str>>,
-        keep_alive_handle: Option<KeepAliveHandle>,
+        keep_alive_handle: Option<KeepAliveNotifySignalHandle>,
     },
     SkinLibraryUpdated {
         skin_library: SkinLibrary,
@@ -390,6 +410,9 @@ pub enum MessageToFrontend {
         update: UpdatePrompt,
     },
     OpenOrFocusMainWindow,
+    ManualCurseforgeDownloadsRequired {
+        request: ManualCurseforgeDownloadRequest,
+    },
 }
 
 #[derive(Debug, Default)]

@@ -10,10 +10,10 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2021"
-rust-version = "1.65"
+edition = "2024"
+rust-version = "1.86"
 name = "wayland-protocols"
-version = "0.32.10"
+version = "0.32.13"
 authors = ["Elinor Berger <elinor@safaradeg.net>"]
 build = false
 include = [
@@ -51,6 +51,7 @@ categories = [
 ]
 license = "MIT"
 repository = "https://github.com/smithay/wayland-rs"
+resolver = "2"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -73,15 +74,15 @@ path = "src/lib.rs"
 version = "2"
 
 [dependencies.wayland-backend]
-version = "0.3.12"
+version = "0.3.15"
 
 [dependencies.wayland-client]
-version = "0.31.12"
+version = "0.31.14"
 optional = true
 
 [dependencies.wayland-scanner]
-version = "0.31.8"
+version = "0.31.10"
 
 [dependencies.wayland-server]
-version = "0.31.11"
+version = "0.31.13"
 optional = true

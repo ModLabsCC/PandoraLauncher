@@ -1,17 +1,21 @@
-#[cfg(not(feature = "tokio"))]
+#[cfg(feature = "async-io")]
 use async_process::{Child, unix::CommandExt};
 #[cfg(unix)]
 use std::process::Output;
 use std::{ffi::OsStr, io::Error, process::Stdio};
-#[cfg(feature = "tokio")]
+#[cfg(all(feature = "tokio", not(feature = "async-io")))]
 use tokio::process::Child;
 
 use crate::address::transport::Unixexec;
 
 /// A wrapper around the command API of the underlying async runtime.
+///
+/// Unlike the socket transports, `unixexec` isn't run-time selected: `async-process` is used
+/// whenever it's compiled in (its pipes are `Async<_>`, which any runtime can drive), so with both
+/// backends a tokio app connecting over `unixexec:` picks up async-io's reactor.
 pub struct Command(
-    #[cfg(not(feature = "tokio"))] async_process::Command,
-    #[cfg(feature = "tokio")] tokio::process::Command,
+    #[cfg(feature = "async-io")] async_process::Command,
+    #[cfg(all(feature = "tokio", not(feature = "async-io")))] tokio::process::Command,
 );
 
 impl Command {
@@ -20,10 +24,10 @@ impl Command {
     where
         S: AsRef<OsStr>,
     {
-        #[cfg(not(feature = "tokio"))]
+        #[cfg(feature = "async-io")]
         return Self(async_process::Command::new(program));
 
-        #[cfg(feature = "tokio")]
+        #[cfg(all(feature = "tokio", not(feature = "async-io")))]
         return Self(tokio::process::Command::new(program));
     }
 

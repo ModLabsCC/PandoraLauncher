@@ -7,7 +7,7 @@ xml-rs, an XML library for Rust
 
 [Documentation](https://docs.rs/xml/)
 
-  [crates-io-img]: https://img.shields.io/crates/v/xml-rs.svg
+  [crates-io-img]: https://img.shields.io/crates/v/xml.svg
   [docs-img]: https://img.shields.io/badge/docs-latest%20release-6495ed.svg
 
 xml-rs is an XML library for the [Rust](https://www.rust-lang.org/) programming language.
@@ -35,8 +35,7 @@ clean manner.
 
 This parser is mostly full-featured, however, there are limitations:
 * Legacy code pages and non-Unicode encodings are not supported;
-* DTD validation is not supported (but entities defined in the internal subset are supported);
-* attribute value normalization is not performed, and end-of-line characters are not normalized either.
+* DTD validation is not supported (but entities defined in the internal subset are supported).
 
 Other than that the parser tries to be mostly XML-1.1-compliant.
 

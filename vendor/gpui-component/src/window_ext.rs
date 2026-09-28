@@ -1,11 +1,11 @@
 use crate::{
     Placement, Root,
     dialog::{AlertDialog, Dialog},
-    input::InputState,
+    input::AnyInputState,
     notification::Notification,
     sheet::Sheet,
 };
-use gpui::{App, Entity, Window};
+use gpui::{App, ElementId, Entity, Window};
 use std::rc::Rc;
 
 /// Extension trait for [`Window`] to add dialog, sheet .. functionality.
@@ -64,8 +64,12 @@ pub trait WindowExt: Sized {
     /// Pushes a notification to the notification list.
     fn push_notification(&mut self, note: impl Into<Notification>, cx: &mut App);
 
-    /// Removes the notification with the given id.
+    /// Removes all notifications whose id matches `T`, including ones registered with
+    /// either `Notification::id` or `Notification::id1` (any key).
     fn remove_notification<T: Sized + 'static>(&mut self, cx: &mut App);
+
+    /// Removes a single notification matching the given type `T` and `key` (paired with `Notification::id1`).
+    fn remove_notification1<T: Sized + 'static>(&mut self, key: impl Into<ElementId>, cx: &mut App);
 
     /// Clears all notifications.
     fn clear_notifications(&mut self, cx: &mut App);
@@ -73,10 +77,33 @@ pub trait WindowExt: Sized {
     /// Returns number of notifications.
     fn notifications(&mut self, cx: &mut App) -> Rc<Vec<Entity<Notification>>>;
 
-    /// Return current focused Input entity.
-    fn focused_input(&mut self, cx: &mut App) -> Option<Entity<InputState>>;
+    /// Return the currently focused input state.
+    ///
+    /// Covers `Input`, `Textarea`, `Editor` and `OtpInput`, use
+    /// [`AnyInputState::as_input`] and friends to get the concrete state.
+    /// A registration whose focus handle is no longer focused (e.g. the input
+    /// was removed from the tree while focused) is treated as `None`.
+    fn focused_input(&mut self, cx: &mut App) -> Option<AnyInputState>;
     /// Returns true if there is a focused Input entity.
     fn has_focused_input(&mut self, cx: &mut App) -> bool;
+
+    /// Returns the merged selected text across registered selectable regions
+    /// in this window, in logical document order and joined with `\n`.
+    #[deprecated(note = "use gpui_base::TextSelection::selected_text instead")]
+    fn selected_text(&mut self, cx: &mut App) -> String;
+
+    /// Returns true if any registered region has an active text selection in
+    /// this window, including renderer-local selections such as select-all.
+    #[deprecated(note = "use gpui_base::TextSelection::has_selection instead")]
+    fn has_text_selection(&mut self, cx: &mut App) -> bool;
+
+    /// Clears the window text selection and all registered renderer-local selections.
+    #[deprecated(note = "use gpui_base::TextSelection::clear instead")]
+    fn clear_text_selection(&mut self, cx: &mut App);
+
+    /// Ends the in-progress window-level text selection drag (if any).
+    #[deprecated(note = "use gpui_base::TextSelection::end instead")]
+    fn end_text_selection(&mut self, cx: &mut App);
 }
 
 impl WindowExt for Window {
@@ -126,7 +153,7 @@ impl WindowExt for Window {
         F: Fn(AlertDialog, &mut Window, &mut App) -> AlertDialog + 'static,
     {
         self.open_dialog(cx, move |_, window, cx| {
-            build(AlertDialog::new(cx), window, cx).into_dialog(window, cx)
+            build(AlertDialog::new(cx), window, cx).build_surface(window, cx)
         })
     }
 
@@ -165,6 +192,18 @@ impl WindowExt for Window {
     }
 
     #[inline]
+    fn remove_notification1<T: Sized + 'static>(
+        &mut self,
+        key: impl Into<ElementId>,
+        cx: &mut App,
+    ) {
+        let key = key.into();
+        Root::update(self, cx, |root, window, cx| {
+            root.remove_notification1::<T>(key, window, cx);
+        })
+    }
+
+    #[inline]
     fn clear_notifications(&mut self, cx: &mut App) {
         Root::update(self, cx, |root, window, cx| {
             root.clear_notifications(window, cx);
@@ -178,11 +217,43 @@ impl WindowExt for Window {
 
     #[inline]
     fn has_focused_input(&mut self, cx: &mut App) -> bool {
-        Root::read(self, cx).focused_input.is_some()
+        self.focused_input(cx).is_some()
+    }
+
+    fn focused_input(&mut self, cx: &mut App) -> Option<AnyInputState> {
+        let state = Root::read(self, cx).focused_input.clone()?;
+        if state.focus_handle(cx).is_focused(self) {
+            return Some(state);
+        }
+
+        // An input removed from the tree while focused never re-renders to
+        // unregister itself; drop the stale registration lazily.
+        Root::try_update(self, cx, |root, _, cx| {
+            if root.focused_input.as_ref() == Some(&state) {
+                root.focused_input = None;
+                cx.notify();
+            }
+        });
+        None
     }
 
     #[inline]
-    fn focused_input(&mut self, cx: &mut App) -> Option<Entity<InputState>> {
-        Root::read(self, cx).focused_input.clone()
+    fn selected_text(&mut self, cx: &mut App) -> String {
+        gpui_base::TextSelection::selected_text(self, cx)
+    }
+
+    #[inline]
+    fn has_text_selection(&mut self, cx: &mut App) -> bool {
+        gpui_base::TextSelection::has_selection(self, cx)
+    }
+
+    #[inline]
+    fn clear_text_selection(&mut self, cx: &mut App) {
+        gpui_base::TextSelection::clear(self, cx);
+    }
+
+    #[inline]
+    fn end_text_selection(&mut self, cx: &mut App) {
+        gpui_base::TextSelection::end(self, cx);
     }
 }

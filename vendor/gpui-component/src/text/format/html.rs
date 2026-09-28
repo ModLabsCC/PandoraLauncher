@@ -2,8 +2,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
 
-use gpui::{DefiniteLength, SharedString, px, relative};
+use gpui::{DefiniteLength, Hsla, SharedString, px, relative};
 use html5ever::tendril::TendrilSink;
 use html5ever::{LocalName, ParseOpts, local_name, parse_document};
 use markup5ever_rcdom::{Node, NodeData, RcDom};
@@ -75,7 +76,7 @@ pub(crate) fn parse(source: &str, cx: &mut NodeContext) -> Result<ParsedDocument
 
     Ok(ParsedDocument {
         source: source.to_string().into(),
-        blocks: vec![node],
+        blocks: Arc::new(vec![node]),
     })
 }
 
@@ -99,6 +100,31 @@ fn attr_value(attrs: &RefCell<Vec<html5ever::Attribute>>, name: LocalName) -> Op
             None
         }
     })
+}
+
+/// Get the highlight background color for a `<mark>` element.
+///
+/// Reads the `color` attribute first, then the `background-color` declaration
+/// from the `style` attribute. Color values are parsed by [`crate::try_parse_color`],
+/// supporting hex (`#3366ff`) and Tailwind expressions (`blue`, `blue-200`, `blue/30`).
+fn mark_color(attrs: &RefCell<Vec<html5ever::Attribute>>) -> Option<Hsla> {
+    let color_attr = attrs.borrow().iter().find_map(|attr| {
+        if &*attr.name.local == "color" {
+            Some(attr.value.to_string())
+        } else {
+            None
+        }
+    });
+
+    if let Some(value) = color_attr
+        && let Ok(color) = crate::try_parse_color(value.trim())
+    {
+        return Some(color);
+    }
+
+    style_attrs(attrs)
+        .get("background-color")
+        .and_then(|v| crate::try_parse_color(v.trim()).ok())
 }
 
 /// Get style properties to HashMap
@@ -233,18 +259,23 @@ fn trim_text(text: &str) -> String {
     out
 }
 
-fn parse_paragraph(
-    paragraph: &mut Paragraph,
-    node: &Rc<Node>,
-) {
-    fn push_merged(paragraph: &mut Paragraph, text: String, marks: Vec<(Range<usize>, TextMark)>, new_mark: Option<TextMark>) {
+fn parse_paragraph(paragraph: &mut Paragraph, node: &Rc<Node>) {
+    fn push_merged(
+        paragraph: &mut Paragraph,
+        text: String,
+        marks: Vec<(Range<usize>, TextMark)>,
+        new_mark: Option<TextMark>,
+    ) {
         if text.is_empty() {
             return;
         }
         let mut node = InlineNode::new(text).marks(marks);
         if let Some(new_mark) = new_mark {
             let len = node.text.len();
-            if let Some(last) = node.marks.last_mut() && last.0.start == 0 && last.0.end == len {
+            if let Some(last) = node.marks.last_mut()
+                && last.0.start == 0
+                && last.0.end == len
+            {
                 last.1.merge(new_mark);
             } else {
                 node.marks.push((0..node.text.len(), new_mark));
@@ -253,7 +284,11 @@ fn parse_paragraph(
         paragraph.push(node);
     }
 
-    fn merge_children_with_mark(node: &Node, paragraph: &mut Paragraph, new_mark: Option<TextMark>) {
+    fn merge_children_with_mark(
+        node: &Node,
+        paragraph: &mut Paragraph,
+        new_mark: Option<TextMark>,
+    ) {
         let mut merged_text = String::new();
         let mut merged_marks = Vec::new();
 
@@ -265,7 +300,7 @@ fn parse_paragraph(
                 let offset = merged_text.len();
                 merged_text.push_str(&node.text);
                 for (range, child_mark) in node.marks {
-                    merged_marks.push((range.start+offset .. range.end+offset, child_mark));
+                    merged_marks.push((range.start + offset..range.end + offset, child_mark));
                 }
 
                 if let Some(mut image) = node.image {
@@ -273,8 +308,12 @@ fn parse_paragraph(
                         image.link = Some(link_mark);
                     }
 
-                    push_merged(paragraph, std::mem::take(&mut merged_text),
-                        std::mem::take(&mut merged_marks), new_mark.clone());
+                    push_merged(
+                        paragraph,
+                        std::mem::take(&mut merged_text),
+                        std::mem::take(&mut merged_marks),
+                        new_mark.clone(),
+                    );
 
                     paragraph.push(InlineNode::image(image));
                 }
@@ -297,10 +336,25 @@ fn parse_paragraph(
                 merge_children_with_mark(node, paragraph, Some(TextMark::default().bold()));
             }
             local_name!("del") | local_name!("s") => {
-                merge_children_with_mark(node, paragraph, Some(TextMark::default().strikethrough()));
+                merge_children_with_mark(
+                    node,
+                    paragraph,
+                    Some(TextMark::default().strikethrough()),
+                );
+            }
+            local_name!("u") => {
+                merge_children_with_mark(node, paragraph, Some(TextMark::default().underline()));
             }
             local_name!("code") => {
                 merge_children_with_mark(node, paragraph, Some(TextMark::default().code()));
+            }
+            local_name!("mark") => {
+                let color = mark_color(&attrs).unwrap_or_else(|| crate::yellow(200));
+                merge_children_with_mark(
+                    node,
+                    paragraph,
+                    Some(TextMark::default().highlight(color)),
+                );
             }
             local_name!("a") => {
                 let link_mark = LinkMark {
@@ -311,7 +365,11 @@ fn parse_paragraph(
                     ..Default::default()
                 };
 
-                merge_children_with_mark(node, paragraph, Some(TextMark::default().link(link_mark)));
+                merge_children_with_mark(
+                    node,
+                    paragraph,
+                    Some(TextMark::default().link(link_mark)),
+                );
             }
             local_name!("img") => {
                 let Some(src) = attr_value(attrs, local_name!("src")) else {
@@ -601,6 +659,7 @@ fn consume_paragraph(children: &mut Vec<BlockNode>, paragraph: &mut Paragraph) {
 #[cfg(test)]
 mod tests {
     use gpui::{px, relative};
+    use std::sync::Arc;
 
     use crate::text::{
         document::ParsedDocument,
@@ -637,6 +696,20 @@ mod tests {
     #[test]
     fn test_trim_text() {
         assert_eq!(trim_text("  \n\tHello world \t\r "), " Hello world ",);
+    }
+
+    #[test]
+    fn test_mark() {
+        let mut cx = NodeContext::default();
+
+        // `<mark>` is rendered as a highlight, kept as `==...==` in markdown.
+        let html = r#"<p>Hello <mark>world</mark></p>"#;
+        let node = super::parse(html, &mut cx).unwrap();
+        assert_eq!(node.to_markdown(), "Hello ==world==");
+
+        let html = r#"<p><mark color="blue">blue</mark> and <mark style="background-color: #336699">hex</mark></p>"#;
+        let node = super::parse(html, &mut cx).unwrap();
+        assert_eq!(node.to_markdown(), "==blue== and ==hex==");
     }
 
     #[test]
@@ -695,7 +768,7 @@ mod tests {
             node,
             ParsedDocument {
                 source: html.to_string().into(),
-                blocks: vec![BlockNode::Paragraph(Paragraph {
+                blocks: Arc::new(vec![BlockNode::Paragraph(Paragraph {
                     span: None,
                     children: vec![InlineNode::image(ImageNode {
                         url: "https://example.com/image.png".to_string().into(),
@@ -706,7 +779,7 @@ mod tests {
                         ..Default::default()
                     })],
                     ..Default::default()
-                })]
+                })])
             }
         );
 
@@ -716,7 +789,7 @@ mod tests {
             node,
             ParsedDocument {
                 source: html.to_string().into(),
-                blocks: vec![BlockNode::Paragraph(Paragraph {
+                blocks: Arc::new(vec![BlockNode::Paragraph(Paragraph {
                     span: None,
                     children: vec![InlineNode::image(ImageNode {
                         url: "https://example.com/image.png".to_string().into(),
@@ -727,7 +800,7 @@ mod tests {
                         ..Default::default()
                     })],
                     ..Default::default()
-                })]
+                })])
             }
         );
     }

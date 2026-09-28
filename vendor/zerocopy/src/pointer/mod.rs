@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-2-Clause OR Apache-2.0 OR MIT
+//
 // Copyright 2023 The Fuchsia Authors
 //
 // Licensed under a BSD-style license <LICENSE-BSD>, Apache License, Version 2.0
@@ -8,19 +10,17 @@
 
 //! Abstractions over raw pointers.
 
+#![allow(missing_docs)]
+
 mod inner;
-#[doc(hidden)]
 pub mod invariant;
 mod ptr;
-mod transmute;
+pub mod transmute;
 
-#[doc(hidden)]
-pub use {inner::PtrInner, transmute::*};
-#[doc(hidden)]
-pub use {
-    invariant::{BecauseExclusive, BecauseImmutable, Read},
-    ptr::*,
-};
+pub use inner::PtrInner;
+pub use invariant::{BecauseExclusive, BecauseImmutable, Read};
+pub use ptr::{Ptr, TryWithError};
+pub use transmute::*;
 
 use crate::wrappers::ReadOnly;
 
@@ -38,10 +38,12 @@ where
     I: invariant::Invariants<Validity = invariant::Initialized>,
     I::Aliasing: invariant::Reference,
 {
-    ptr.as_bytes().as_ref().iter().all(|&byte| byte == 0)
+    ptr.as_bytes().as_ref().iter().all(
+        #[inline(always)]
+        |&byte| byte == 0,
+    )
 }
 
-#[doc(hidden)]
 pub mod cast {
     use core::{marker::PhantomData, mem};
 

@@ -17,7 +17,7 @@ use ustr::Ustr;
 use crate::{
     component::instance_dropdown::InstanceDropdown,
     entity::{
-        DataEntities, instance::InstanceEntry, metadata::{AsMetadataResult, FrontendMetadata, FrontendMetadataResult, FrontendMetadataState}
+        DataEntities, instance::InstanceEntry, metadata::{AsMetadataResult, FrontendMetadata, FrontendMetadataResult}
     },
     root,
 };
@@ -39,8 +39,6 @@ struct InstallDialog {
     instances: Option<Entity<SelectState<InstanceDropdown>>>,
     unsupported_instances: usize,
 
-    mod_files: FxHashMap<(Ustr, Option<u32>), Entity<FrontendMetadataState>>,
-
     target: Option<InstallTarget>,
 
     last_selected_minecraft_version: Option<SharedString>,
@@ -56,6 +54,7 @@ struct InstallDialog {
     install_dependencies: bool,
 
     mod_version_select_state: Option<Entity<SelectState<SearchableVec<ModVersionItem>>>>,
+    mod_versions_retry_task: Task<()>,
 }
 
 pub fn open(
@@ -139,7 +138,6 @@ pub fn open(
             version_matrix,
             instances: None,
             unsupported_instances: 0,
-            mod_files: Default::default(),
             target: Some(InstallTarget::Instance(instance_id)),
             fixed_minecraft_version,
             minecraft_version_select_state: None,
@@ -151,6 +149,7 @@ pub fn open(
             install_dependencies: true,
             mod_version_select_state: None,
             last_selected_loader: None,
+            mod_versions_retry_task: Task::ready(()),
         };
         install_dialog.show(window, cx);
     } else {
@@ -201,7 +200,6 @@ pub fn open(
             version_matrix,
             instances,
             unsupported_instances,
-            mod_files: Default::default(),
             target: None,
             fixed_minecraft_version: None,
             minecraft_version_select_state: None,
@@ -213,6 +211,7 @@ pub fn open(
             install_dependencies: true,
             mod_version_select_state: None,
             last_selected_loader: None,
+            mod_versions_retry_task: Task::ready(()),
         };
         install_dialog.show(window, cx);
     }
@@ -287,6 +286,7 @@ impl InstallDialog {
         let Some(selected_file) = selected_file else {
             return modal.child(content);
         };
+        let selected_file = selected_file.file;
 
         let mut required_dependencies = selected_file.dependencies
             .iter()
@@ -304,12 +304,13 @@ impl InstallDialog {
             let mut existing_projects = FxHashSet::default();
 
             for existing_content in instance.read(cx).content.values() {
-                let existing_content = existing_content.read(cx);
-                for summary in existing_content.iter() {
-                    let ContentSource::CurseforgeProject { project_id: project } = &summary.content_source else {
-                        continue;
-                    };
-                    existing_projects.insert(project.clone());
+                if let Some(existing_content) = existing_content.read(cx) {
+                    for summary in existing_content.iter() {
+                        let ContentSource::CurseforgeProject { project_id: project } = &summary.content_source else {
+                            continue;
+                        };
+                        existing_projects.insert(project.clone());
+                    }
                 }
             };
 
@@ -387,7 +388,7 @@ impl InstallDialog {
 
                     let mut hash = [0u8; 20];
                     let Ok(_) = hex::decode_to_slice(&*sha1, &mut hash) else {
-                        let warning = format!("File {} has invalid sha1: {}", selected_file.file_name, sha1);
+                        let warning = t::instance::content::install::file_invalid_sha1(&selected_file.file_name, &sha1);
                         window.push_notification((NotificationType::Error, SharedString::new(warning)), cx);
                         return;
                     };
@@ -449,7 +450,9 @@ impl InstallDialog {
                             .w_full()
                             .gap_0p5()
                             .child(
-                                Select::new(instances).placeholder(t::instance::none_selected()).title_prefix(format!("{}: ", t::instance::label())),
+                                Select::new(instances).placeholder(t::instance::none_selected())
+                                    .title_prefix(format!("{}: ", t::instance::label()))
+                                    .search_placeholder(t::common::search()),
                             )
                             .when(self.unsupported_instances > 0, |content| {
                                 content.child(t::instance::incompatible(self.unsupported_instances))
@@ -519,6 +522,7 @@ impl InstallDialog {
         Select::new(select_state)
             .disabled(self.fixed_minecraft_version.is_some())
             .title_prefix(format!("{}: ", t::instance::game_version()))
+            .search_placeholder(t::common::search())
             .into_any_element()
     }
 
@@ -598,26 +602,23 @@ impl InstallDialog {
                 Some(CurseforgeModLoaderType::from_name(selected_loader_string.as_str()) as u32)
             };
 
-            let request = self.mod_files
-                .entry((selected_game_version, mod_loader_type))
-                .or_insert_with(|| {
-                    FrontendMetadata::request(
-                        &self.data.metadata,
-                        MetadataRequest::CurseforgeGetModFiles(CurseforgeGetModFilesRequest {
-                            mod_id: self.project_id,
-                            game_version: Some(selected_game_version),
-                            mod_loader_type,
-                            page_size: None,
-                        }),
-                        cx,
-                    )
-                });
+            let request = FrontendMetadata::request(
+                &self.data.metadata,
+                MetadataRequest::CurseforgeGetModFiles(CurseforgeGetModFilesRequest {
+                    mod_id: self.project_id,
+                    game_version: Some(selected_game_version),
+                    mod_loader_type,
+                    release_types: None,
+                    page_size: None,
+                }),
+                cx,
+            );
 
             let result: FrontendMetadataResult<CurseforgeGetModFilesResult> = request.read(cx).result();
 
             match result {
                 FrontendMetadataResult::Loading => {
-                    return SharedString::new_static("Loading files...").into_any_element();
+                    return t::instance::content::install::loading_files().into_any_element();
                 },
                 FrontendMetadataResult::Loaded(result) => {
                     let mod_versions: Vec<ModVersionItem> = result.data.iter().map(|file| {
@@ -652,6 +653,7 @@ impl InstallDialog {
 
                     let highest = highest_release.or(highest_beta).or(highest_alpha);
 
+                    self.mod_versions_retry_task = Task::ready(());
                     self.mod_version_select_state = Some(cx.new(|cx| {
                         let mut select_state =
                             SelectState::new(SearchableVec::new(mod_versions), None, window, cx).searchable(true);
@@ -661,13 +663,27 @@ impl InstallDialog {
                         select_state
                     }));
                 },
-                FrontendMetadataResult::Error(shared_string) => {
-                    return SharedString::new(format!("Error loading files: {}", shared_string)).into_any_element();
+                FrontendMetadataResult::Error(shared_string, alive) => {
+                    if let Some(alive) = alive {
+                        self.mod_versions_retry_task = cx.spawn(async move |page, cx| {
+                            alive.await_notification().await;
+                            _ = page.update(cx, |page, cx| {
+                                page.mod_version_select_state = None;
+                                page.mod_versions_retry_task = Task::ready(());
+                                cx.notify();
+                            });
+                        });
+                    }
+
+                    return t::instance::content::install::error_loading_files(&shared_string).into_any_element();
                 },
             }
         }
 
-        Select::new(self.mod_version_select_state.as_ref().unwrap()).title_prefix(t::instance::content::filename_prefix()).into_any_element()
+        Select::new(self.mod_version_select_state.as_ref().unwrap())
+            .title_prefix(t::instance::content::filename_prefix())
+            .search_placeholder(t::common::search())
+            .into_any_element()
     }
 }
 
@@ -677,14 +693,20 @@ struct ModVersionItem {
     file: CurseforgeFile,
 }
 
+impl PartialEq for ModVersionItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
 impl SelectItem for ModVersionItem {
-    type Value = CurseforgeFile;
+    type Value = Self;
 
     fn title(&self) -> SharedString {
         self.name.clone()
     }
 
     fn value(&self) -> &Self::Value {
-        &self.file
+        self
     }
 }

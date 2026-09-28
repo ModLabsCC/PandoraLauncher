@@ -1,38 +1,37 @@
-use gpui::{App, ElementId, Entity, FocusHandle, Global, OwnedMenu};
-use std::collections::HashSet;
+use gpui::{App, Entity, Global};
 
 use crate::text::TextViewState;
 
+pub use gpui_base::GlobalState;
+
 pub(crate) fn init(cx: &mut App) {
-    cx.set_global(GlobalState::new());
+    // Preserve the legacy initialization point while `gpui_base::init` remains
+    // after Root initialization for focus-trap ordering compatibility.
+    GlobalState::init(cx);
+    cx.set_global(UiGlobalState::new());
 }
 
-impl Global for GlobalState {}
-
-pub struct GlobalState {
+/// UI-only global state whose types cannot cross into `gpui-base`.
+pub(crate) struct UiGlobalState {
     pub(crate) text_view_state_stack: Vec<Entity<TextViewState>>,
-    /// Set of open popover IDs that use deferred rendering.
-    /// When this set is not empty, we are inside at least one deferred context.
-    /// This is used to prevent double-deferred elements which would cause GPUI to panic.
-    open_deferred_popovers: HashSet<ElementId>,
-    /// Application menus storage
-    app_menus: Vec<OwnedMenu>,
+    selection_document_order: u64,
 }
 
-impl GlobalState {
-    pub(crate) fn new() -> Self {
+impl Global for UiGlobalState {}
+
+impl UiGlobalState {
+    fn new() -> Self {
         Self {
             text_view_state_stack: Vec::new(),
-            open_deferred_popovers: HashSet::new(),
-            app_menus: Vec::new(),
+            selection_document_order: 1,
         }
     }
 
-    pub fn global(cx: &App) -> &Self {
+    pub(crate) fn global(cx: &App) -> &Self {
         cx.global::<Self>()
     }
 
-    pub fn global_mut(cx: &mut App) -> &mut Self {
+    pub(crate) fn global_mut(cx: &mut App) -> &mut Self {
         cx.global_mut::<Self>()
     }
 
@@ -40,30 +39,13 @@ impl GlobalState {
         self.text_view_state_stack.last()
     }
 
-    /// Check if we are currently inside a deferred context (e.g., inside an open Popover).
-    pub(crate) fn is_in_deferred_context(&self) -> bool {
-        !self.open_deferred_popovers.is_empty()
+    pub(crate) fn begin_selection_frame(&mut self) {
+        self.selection_document_order = 1;
     }
 
-    /// Register a popover that uses deferred rendering as open.
-    pub(crate) fn register_deferred_popover(&mut self, focus_handle: &FocusHandle) {
-        self.open_deferred_popovers
-            .insert(format!("{focus_handle:?}").into());
-    }
-
-    /// Unregister a popover when it closes.
-    pub(crate) fn unregister_deferred_popover(&mut self, focus_handle: &FocusHandle) {
-        let element_id: ElementId = format!("{focus_handle:?}").into();
-        self.open_deferred_popovers.remove(&element_id);
-    }
-
-    /// Get the application menus
-    pub fn app_menus(&self) -> &[OwnedMenu] {
-        &self.app_menus
-    }
-
-    /// Set the application menus
-    pub fn set_app_menus(&mut self, menus: Vec<OwnedMenu>) {
-        self.app_menus = menus;
+    pub(crate) fn next_selection_document_order(&mut self) -> u64 {
+        let order = self.selection_document_order;
+        self.selection_document_order = self.selection_document_order.wrapping_add(1);
+        order
     }
 }

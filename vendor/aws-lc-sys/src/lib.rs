@@ -50,6 +50,7 @@ platform_binding!(x86_64_unknown_linux_musl, x86_64_unknown_linux_musl_crypto);
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::default_trait_access,
+    clippy::doc_markdown,
     clippy::missing_safety_doc,
     clippy::must_use_candidate,
     clippy::not_unsafe_ptr_arg_deref,
@@ -84,7 +85,7 @@ pub fn ERR_GET_LIB(packed_error: u32) -> i32 {
 #[allow(non_snake_case, clippy::cast_possible_wrap)]
 #[must_use]
 pub fn ERR_GET_REASON(packed_error: u32) -> i32 {
-    (packed_error & 0xFFF) as i32
+    (packed_error & 0x0FFF) as i32
 }
 
 #[allow(non_snake_case)]
@@ -104,4 +105,10 @@ pub fn BIO_get_mem_data(b: *mut BIO, pp: *mut *mut c_char) -> c_long {
 
 pub fn init() {
     unsafe { CRYPTO_library_init() }
+}
+
+/// Always `0`: `aws-lc-sys` does not track an AWS-LC FIPS release branch.
+#[must_use]
+pub const fn fips_version() -> u32 {
+    0
 }

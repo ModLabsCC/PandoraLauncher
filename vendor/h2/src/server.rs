@@ -258,6 +258,11 @@ pub struct Builder {
     ///
     /// When this gets exceeded, we issue GOAWAYs.
     local_max_error_reset_streams: Option<usize>,
+
+    /// connection-level budget for DATA framing overhead.
+    ///
+    /// When this gets exhausted, we issue a GOAWAY with `ENHANCE_YOUR_CALM`.
+    data_frame_budget: proto::DataFrameBudget,
 }
 
 /// Send a response back to the client
@@ -655,8 +660,8 @@ impl Builder {
             settings: Settings::default(),
             initial_target_connection_window_size: None,
             max_send_buffer_size: proto::DEFAULT_MAX_SEND_BUFFER_SIZE,
-
             local_max_error_reset_streams: Some(proto::DEFAULT_LOCAL_RESET_COUNT_MAX),
+            data_frame_budget: proto::DataFrameBudget::Auto,
         }
     }
 
@@ -797,6 +802,18 @@ impl Builder {
     /// ```
     pub fn max_header_list_size(&mut self, max: u32) -> &mut Self {
         self.settings.set_max_header_list_size(Some(max));
+        self
+    }
+
+    /// Sets the header table size.
+    ///
+    /// This setting informs the peer of the maximum size of the header compression
+    /// table used to encode header blocks, in octets. The encoder may select any value
+    /// equal to or less than the header table size specified by the sender.
+    ///
+    /// The default value is 4,096.
+    pub fn header_table_size(&mut self, size: u32) -> &mut Self {
+        self.settings.set_header_table_size(Some(size));
         self
     }
 
@@ -1025,6 +1042,29 @@ impl Builder {
     /// [extended CONNECT protocol]: https://datatracker.ietf.org/doc/html/rfc8441#section-4
     pub fn enable_connect_protocol(&mut self) -> &mut Self {
         self.settings.set_enable_connect_protocol(Some(1));
+        self
+    }
+
+    /// Sets a connection-level budget for limiting memory overhead from
+    /// received small DATA frames.
+    ///
+    /// HTTP/2 flow control accounts for DATA payload bytes, but not the
+    /// additional memory required to buffer each DATA frame. An excessive
+    /// number of small frames may therefore consume disproportionate memory.
+    ///
+    /// Small DATA frames consume this budget. The budget is restored when
+    /// buffered frames are consumed by the application, while sufficiently
+    /// large frames may also restore budget. Empty DATA frames are limited
+    /// separately and do not consume this budget.
+    ///
+    /// When this budget is exhausted, the connection is closed with
+    /// `ENHANCE_YOUR_CALM`.
+    ///
+    /// By default, the budget is half the initial connection window, with a
+    /// minimum of 25,600 bytes. Increasing the connection window therefore
+    /// also increases the permitted framing overhead.
+    pub fn data_frame_budget(&mut self, budget: usize) -> &mut Self {
+        self.data_frame_budget = proto::DataFrameBudget::Configured(budget);
         self
     }
 
@@ -1493,6 +1533,10 @@ where
                                 .builder
                                 .local_max_error_reset_streams,
                             settings: self.builder.settings.clone(),
+                            data_frame_budget: self
+                                .builder
+                                .data_frame_budget
+                                .resolve(self.builder.initial_target_connection_window_size),
                         },
                     );
 

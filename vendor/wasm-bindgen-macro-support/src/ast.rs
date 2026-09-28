@@ -8,6 +8,32 @@ use std::hash::{Hash, Hasher};
 use syn::Path;
 use wasm_bindgen_shared as shared;
 
+pub fn use_js_sys_futures() -> bool {
+    // Honor either the build-time cfg or an expansion-time environment variable.
+    // The env-var form is necessary because `cfg!(...)` is resolved when this
+    // proc-macro crate is itself compiled (on the host), and Cargo does not pass
+    // `--cfg`/`RUSTFLAGS` to host proc-macros when `--target` is used. Reading
+    // an env var at expansion time provides a stable workflow that works
+    // regardless of how the consumer configures Cargo.
+    cfg!(wasm_bindgen_use_js_sys) || std::env::var_os("WASM_BINDGEN_USE_JS_SYS").is_some()
+}
+
+/// Whether a function is a start function, and if so, whether it
+/// should be exported to JS.
+#[cfg_attr(feature = "extra-traits", derive(Debug))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum StartKind {
+    None,
+    Public,
+    Private,
+}
+
+impl StartKind {
+    pub fn is_start(self) -> bool {
+        matches!(self, StartKind::Public | StartKind::Private)
+    }
+}
+
 /// An abstract syntax tree representing a rust program. Contains
 /// extra information for joining up this rust code with javascript.
 #[cfg_attr(feature = "extra-traits", derive(Debug))]
@@ -94,11 +120,13 @@ pub struct Export {
     pub rust_name: Ident,
     /// Whether or not this function should be flagged as the Wasm start
     /// function.
-    pub start: bool,
+    pub start: StartKind,
     /// Path to wasm_bindgen
     pub wasm_bindgen: Path,
     /// Path to wasm_bindgen_futures
     pub wasm_bindgen_futures: Path,
+    /// Path to js_sys
+    pub js_sys: Path,
 }
 
 /// The 3 types variations of `self`.
@@ -161,8 +189,10 @@ pub enum ImportKind {
     String(ImportString),
     /// Importing a type/class
     Type(ImportType),
-    /// Importing a JS enum
+    /// Importing a JS string enum
     Enum(StringEnum),
+    /// Importing a dynamic union (with fallback variant support)
+    DynamicUnion(DynamicUnion),
 }
 
 /// A function being imported from JS
@@ -196,6 +226,8 @@ pub struct ImportFunction {
     pub wasm_bindgen: Path,
     /// Path to wasm_bindgen_futures
     pub wasm_bindgen_futures: Path,
+    /// Path to js_sys
+    pub js_sys: Path,
     /// Generic parameters as validated simple type parameters for this function
     pub generics: syn::Generics,
 }
@@ -338,6 +370,8 @@ pub struct ImportType {
     pub no_upcast: bool,
     /// If present, don't generate a `Promising` impl
     pub no_promising: bool,
+    /// If present, don't generate an `IntoJsGeneric` impl
+    pub no_into_js_generic: bool,
     /// Path to wasm_bindgen
     pub wasm_bindgen: Path,
     /// Validated generics
@@ -364,8 +398,44 @@ pub struct StringEnum {
     pub rust_attrs: Vec<syn::Attribute>,
     /// Whether to generate a typescript definition for this enum
     pub generate_typescript: bool,
+    /// Whether to suppress the `export` keyword on the generated TS type
+    /// alias (matches the existing flag on c-style enums and structs).
+    pub private: bool,
     /// The namespace to export the enum through, if any
     pub js_namespace: Option<Vec<String>>,
+    /// Path to wasm_bindgen
+    pub wasm_bindgen: Path,
+}
+
+/// The metadata for a Dynamic Union (an untagged JS-side union of string
+/// literals and single-field tuple variants, dispatched at runtime).
+#[cfg_attr(feature = "extra-traits", derive(Debug, PartialEq, Eq))]
+#[derive(Clone)]
+pub struct DynamicUnion {
+    /// The Rust enum's visibility
+    pub vis: syn::Visibility,
+    /// The Rust enum's identifiers
+    pub name: Ident,
+    /// The name of this enum in JS/TS code
+    pub js_name: String,
+    /// The Rust identifiers for the variants
+    pub variants: Vec<Ident>,
+    /// The JS string values of the known string variants
+    pub variant_values: Vec<String>,
+    /// The field types for each variant (empty for known string variants, one element for fallback variant)
+    pub variant_fields: Vec<Vec<syn::Type>>,
+    /// The doc comments on this enum, if any
+    pub comments: Vec<String>,
+    /// Attributes to apply to the Rust enum
+    pub rust_attrs: Vec<syn::Attribute>,
+    /// Whether to generate a typescript definition for this enum
+    pub generate_typescript: bool,
+    /// Whether to suppress the `export` keyword on the generated TS type alias.
+    pub private: bool,
+    /// Whether the last tuple variant should act as an unconditional
+    /// fallback rather than a runtime-checked variant. Set via the
+    /// `#[wasm_bindgen(fallback)]` attribute on the enum.
+    pub fallback: bool,
     /// Path to wasm_bindgen
     pub wasm_bindgen: Path,
 }
@@ -420,8 +490,15 @@ pub struct FunctionArgumentData {
     pub js_name: Option<String>,
     /// Specifies the JS function argument type override
     pub js_type: Option<String>,
+    /// Specifies whether the parameter is optional
+    pub optional: bool,
     /// Specifies the argument description
     pub desc: Option<String>,
+    /// When set, an `&[T]` (or `Option<&[T]>`) argument is converted to a
+    /// freshly-allocated buffer the JS side observes as a plain `Array`
+    /// rather than a typed array. Only meaningful for outgoing arguments
+    /// (Rust calling JS); ignored on exported functions.
+    pub slice_to_array: bool,
 }
 
 /// Information about a Struct being exported
@@ -432,6 +509,9 @@ pub struct Struct {
     pub rust_name: Ident,
     /// The export name of the struct in JS code
     pub js_name: String,
+    /// The namespace-qualified internal name used for wasm symbol generation.
+    /// When a namespace is present, this is `ns1_ns2_JsName`; otherwise it equals `js_name`.
+    pub qualified_name: String,
     /// All the fields of this struct to export
     pub fields: Vec<StructField>,
     /// The doc comments on this struct, if provided
@@ -444,6 +524,23 @@ pub struct Struct {
     pub private: bool,
     /// The namespace to export the struct through, if any
     pub js_namespace: Option<Vec<String>>,
+    /// The parent type this struct extends, if any. When set, the macro
+    /// auto-injects a `parent: wasm_bindgen::Parent<Parent>` field at the
+    /// head of the struct; that field is used as the upcast projection
+    /// target. Users must not declare a `Parent<T>` field themselves.
+    pub extends: Option<Path>,
+    /// The JS-side `js_name` of the parent class, declared on the child
+    /// via `extends_js_class = "..."`. Required when the parent struct
+    /// uses `js_name`: the child macro cannot see the parent struct's
+    /// attributes cross-invocation, so the parent's JS-side identity must
+    /// be redeclared here for `exported_classes` lookup to resolve.
+    /// Defaults to the last segment of the `extends` Rust path (matching
+    /// the no-rename case).
+    pub extends_js_class: Option<String>,
+    /// The JS-side `js_namespace` of the parent class, declared on the
+    /// child via `extends_js_namespace = ...`. Required when the parent
+    /// struct uses `js_namespace`. Defaults to `None`.
+    pub extends_js_namespace: Option<Vec<String>>,
     /// Path to wasm_bindgen
     pub wasm_bindgen: Path,
 }
@@ -478,6 +575,11 @@ pub struct StructField {
     /// If this is `Some`, the auto-generated getter for this field must clone
     /// the field instead of copying it.
     pub getter_with_clone: Option<Span>,
+    /// Whether this field is the macro-injected parent field — i.e. has
+    /// type `wasm_bindgen::Parent<T>` — for an `extends` relationship.
+    /// Parent fields are not exposed to JS as getters/setters; they exist
+    /// only for Rust-side upcast projection.
+    pub is_parent: bool,
     /// Path to wasm_bindgen
     pub wasm_bindgen: Path,
 }
@@ -513,8 +615,10 @@ pub struct Enum {
 #[cfg_attr(feature = "extra-traits", derive(Debug, PartialEq, Eq))]
 #[derive(Clone)]
 pub struct Variant {
-    /// The name of this variant
-    pub name: Ident,
+    /// The name of this variant in Rust
+    pub rust_name: Ident,
+    /// The name of this variant in JS
+    pub js_name: String,
     /// The backing value of this variant
     pub value: u32,
     /// The doc comments on this variant, if any
@@ -541,7 +645,15 @@ impl Export {
             generated_name.push_str(class);
         }
         generated_name.push('_');
-        generated_name.push_str(&self.function.name.to_string());
+        // The JS-side name may contain characters that aren't valid in a
+        // Rust identifier (notably the `[Symbol.<name>]` computed-key form
+        // accepted by `js_name`). Filter to a valid identifier suffix; this
+        // is a no-op for plain identifier names.
+        for c in self.function.name.chars() {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                generated_name.push(c);
+            }
+        }
         Ident::new(&generated_name, Span::call_site())
     }
 
@@ -556,7 +668,7 @@ impl Export {
         };
 
         if let Some(ns) = &self.js_namespace {
-            format!("{}_{base_name}", ns.join("_"))
+            format!("{}__{base_name}", ns.join("__"))
         } else {
             base_name
         }
@@ -572,6 +684,7 @@ impl ImportKind {
             ImportKind::String(_) => false,
             ImportKind::Type(_) => false,
             ImportKind::Enum(_) => false,
+            ImportKind::DynamicUnion(_) => false,
         }
     }
 }

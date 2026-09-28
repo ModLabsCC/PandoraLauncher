@@ -13,8 +13,12 @@
 edition = "2018"
 rust-version = "1.34"
 name = "portable-atomic-util"
-version = "0.2.5"
+version = "0.2.7"
 build = "build.rs"
+exclude = [
+    "/.*",
+    "/tools",
+]
 autolib = false
 autobins = false
 autoexamples = false
@@ -32,14 +36,14 @@ categories = [
     "no-std",
 ]
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/taiki-e/portable-atomic"
+repository = "https://github.com/taiki-e/portable-atomic-util"
 
 [package.metadata.docs.rs]
 all-features = true
 targets = ["x86_64-unknown-linux-gnu"]
 
 [package.metadata.cargo_check_external_types]
-allowed_external_types = []
+allowed_external_types = ["serde_core::*"]
 
 [features]
 alloc = []
@@ -58,6 +62,11 @@ path = "tests/arc.rs"
 [dependencies.portable-atomic]
 version = "1.5.1"
 features = ["require-cas"]
+default-features = false
+
+[dependencies.serde]
+version = "1.0.60"
+optional = true
 default-features = false
 
 [dev-dependencies.build-context]
@@ -87,6 +96,10 @@ priority = 1
 level = "allow"
 priority = 1
 
+[lints.clippy.collapsible_match]
+level = "allow"
+priority = 1
+
 [lints.clippy.declare_interior_mutable_const]
 level = "allow"
 priority = 1
@@ -100,10 +113,6 @@ level = "allow"
 priority = 1
 
 [lints.clippy.incompatible_msrv]
-level = "allow"
-priority = 1
-
-[lints.clippy.lint_groups_priority]
 level = "allow"
 priority = 1
 
@@ -167,10 +176,6 @@ priority = 1
 level = "allow"
 priority = 1
 
-[lints.clippy.unreadable_literal]
-level = "allow"
-priority = 1
-
 [lints.rust]
 deprecated_safe = "warn"
 improper_ctypes = "warn"
@@ -185,19 +190,9 @@ unreachable_pub = "warn"
 level = "warn"
 priority = 0
 check-cfg = [
-    'cfg(target_arch,values("xtensa"))',
-    'cfg(target_arch,values("amdgpu"))',
-    'cfg(target_arch,values("loongarch32"))',
     'cfg(target_os,values("trusty"))',
-    'cfg(target_os,values("psx"))',
-    'cfg(target_env,values("psx"))',
-    'cfg(target_feature,values("lse2","lse128","rcpc3"))',
-    'cfg(target_feature,values("quadword-atomics"))',
-    'cfg(target_feature,values("zaamo","zabha"))',
-    'cfg(target_feature,values("zacas"))',
-    'cfg(target_feature,values("miscellaneous-extensions-3"))',
-    'cfg(target_pointer_width,values("128"))',
-    "cfg(portable_atomic_no_outline_atomics,portable_atomic_outline_atomics,portable_atomic_unstable_f16,portable_atomic_unstable_f128)",
     "cfg(portable_atomic_unstable_coerce_unsized)",
-    "cfg(portable_atomic_test_detect_false,portable_atomic_test_no_std_static_assert_ffi,qemu,valgrind)",
 ]
+
+[profile.release]
+debug = 2

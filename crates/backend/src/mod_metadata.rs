@@ -238,17 +238,16 @@ impl ModMetadataManager {
                 data[checksum_start..checksum_start+4].copy_from_slice(&u32::to_le_bytes(checksum));
                 data[checksum_start+4..checksum_start+8].copy_from_slice(&u32::to_le_bytes(data_len as u32));
             }
-            _ = crate::write_safe(&self.cached_curseforge_info_dat, &data);
+            _ = crate::fs::write_safe(&self.cached_curseforge_info_dat, &data);
         }
         self.content_sources.write().write_dirty_to_folder(&self.sources_dir);
     }
 
-    pub fn set_content_sources(&self, sources: impl Iterator<Item = ([u8; 20], ContentSource)>) {
-        let mut content_sources = self.content_sources.write();
-
-        for (hash, source) in sources {
-            content_sources.set(&hash, source);
+    pub fn set_content_source(&self, hash: [u8; 20], source: ContentSource) {
+        if source == ContentSource::Manual {
+            return;
         }
+        self.content_sources.write().set(&hash, source);
     }
 
     pub fn set_cached_curseforge_info(&self, file_id: u32, info: CachedCurseforgeFileInfo) {
@@ -659,7 +658,7 @@ impl ModMetadataManager {
             let summary = if let Some(cached) = self.by_hash.read().get(&file_hash).cloned() {
                 Some(cached)
             } else {
-                let content_path = crate::create_content_library_path(&self.content_library_dir, file_hash, path.extension());
+                let content_path = crate::fs::create_content_library_path(&self.content_library_dir, file_hash, path.extension());
 
                 if let Ok(mut file) = std::fs::File::open(&content_path) {
                     let filesize = file.metadata().ok().as_ref().map(std::fs::Metadata::len);
@@ -808,7 +807,7 @@ impl ModMetadataManager {
             let summary = if let Some(cached) = self.by_hash.read().get(&cached_info.hash).cloned() {
                 Some(cached)
             } else {
-                let content_path = crate::create_content_library_path(&self.content_library_dir, cached_info.hash, filename.extension());
+                let content_path = crate::fs::create_content_library_path(&self.content_library_dir, cached_info.hash, filename.extension());
 
                 if let Ok(mut file) = std::fs::File::open(&content_path) {
                     let filesize = file.metadata().ok().as_ref().map(std::fs::Metadata::len);
@@ -862,7 +861,7 @@ impl ModMetadataManager {
         }))
     }
 
-    fn load_jarjar<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, _hash: [u8; 20], _filesize: Option<u64>, archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ContentSummary>> {
+    fn load_jarjar<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], _filesize: Option<u64>, archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ContentSummary>> {
         let bytes = file.bytes().ok()?;
 
         let metadata_json: JarJarMetadata = serde_json::from_slice(&bytes).inspect_err(|e| {
@@ -880,7 +879,8 @@ impl ModMetadataManager {
             };
 
             let extension = child.path.rsplit_once('.').map(|(_, last)| OsStr::new(last));
-            let summary = self.get_bytes(&child_bytes, extension);
+            let summary = self.load_mod_summary(hash, Some(child_bytes.len() as u64), &child_bytes, extension, true);
+
             if !ContentSummary::is_unknown(&summary) {
                 return Some(summary);
             }
@@ -1126,7 +1126,11 @@ impl Default for ContentSources {
 }
 
 impl ContentSources {
-    pub fn get(&self, hash: &[u8; 20]) -> Option<ContentSource> {
+    pub fn get(&self, hash: &[u8; 20]) -> ContentSource {
+        self.inner_get(hash).unwrap_or(ContentSource::Manual)
+    }
+
+    fn inner_get(&self, hash: &[u8; 20]) -> Option<ContentSource> {
         let first_byte = hash[0];
         let values = &self.by_first_byte.get(first_byte as usize)?;
         let index = values.binary_search_by_key(&&hash[1..], |v| &v.0).ok()?;
@@ -1134,15 +1138,15 @@ impl ContentSources {
     }
 
     pub fn set(&mut self, hash: &[u8; 20], value: ContentSource) {
+        // Don't replace actual source with manual source
+        if value == ContentSource::Manual {
+            return;
+        }
+
         let first_byte = hash[0];
         let values = &mut self.by_first_byte[first_byte as usize];
         match values.binary_search_by_key(&&hash[1..], |v| &v.0) {
             Ok(existing) => {
-                if value == ContentSource::Manual {
-                    // Don't replace actual source with manual source
-                    return;
-                }
-
                 let old_source = &mut values[existing].1;
                 let skip = match old_source {
                     ContentSource::ModrinthProject { project_id: _ } => {
@@ -1173,7 +1177,7 @@ impl ContentSources {
                 for (key, source) in values {
                     Self::write(&mut data, key, source);
                 }
-                _ = crate::write_safe(&path, &data);
+                _ = crate::fs::write_safe(&path, &data);
             }
         }
     }
@@ -1199,7 +1203,7 @@ impl ContentSources {
             Self::write(&mut data, key, source);
         }
 
-        _ = crate::write_safe(&path, &data);
+        _ = crate::fs::write_safe(&path, &data);
     }
 
     fn write(data: &mut Vec<u8>, key: &[u8], source: &ContentSource) {

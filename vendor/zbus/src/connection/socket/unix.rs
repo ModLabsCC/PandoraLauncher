@@ -1,12 +1,12 @@
-#[cfg(not(feature = "tokio"))]
+#[cfg(feature = "async-io")]
 use async_io::Async;
 #[cfg(target_os = "linux")]
 use std::os::unix::io::FromRawFd;
 #[cfg(unix)]
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
-#[cfg(all(unix, not(feature = "tokio")))]
+#[cfg(all(unix, feature = "async-io"))]
 use std::os::unix::net::UnixStream;
-#[cfg(not(feature = "tokio"))]
+#[cfg(feature = "async-io")]
 use std::sync::Arc;
 #[cfg(unix)]
 use std::{
@@ -15,7 +15,7 @@ use std::{
     os::fd::OwnedFd,
     task::Poll,
 };
-#[cfg(all(windows, not(feature = "tokio")))]
+#[cfg(all(windows, feature = "async-io"))]
 use uds_windows::UnixStream;
 
 #[cfg(unix)]
@@ -27,7 +27,7 @@ use rustix::net::{
 #[cfg(unix)]
 use crate::utils::FDS_MAX;
 
-#[cfg(all(unix, not(feature = "tokio")))]
+#[cfg(all(unix, feature = "async-io"))]
 #[async_trait::async_trait]
 impl super::ReadHalf for Arc<Async<UnixStream>> {
     async fn recvmsg(&mut self, buf: &mut [u8]) -> super::RecvmsgResult {
@@ -59,7 +59,7 @@ impl super::ReadHalf for Arc<Async<UnixStream>> {
     }
 }
 
-#[cfg(all(unix, not(feature = "tokio")))]
+#[cfg(all(unix, feature = "async-io"))]
 #[async_trait::async_trait]
 impl super::WriteHalf for Arc<Async<UnixStream>> {
     async fn sendmsg(
@@ -213,7 +213,7 @@ impl super::WriteHalf for tokio::net::unix::OwnedWriteHalf {
     }
 }
 
-#[cfg(all(windows, not(feature = "tokio")))]
+#[cfg(all(windows, feature = "async-io"))]
 #[async_trait::async_trait]
 impl super::ReadHalf for Arc<Async<UnixStream>> {
     async fn recvmsg(&mut self, buf: &mut [u8]) -> super::RecvmsgResult {
@@ -248,7 +248,7 @@ impl super::ReadHalf for Arc<Async<UnixStream>> {
     }
 }
 
-#[cfg(all(windows, not(feature = "tokio")))]
+#[cfg(all(windows, feature = "async-io"))]
 #[async_trait::async_trait]
 impl super::WriteHalf for Arc<Async<UnixStream>> {
     async fn sendmsg(
@@ -326,9 +326,23 @@ fn fd_sendmsg(fd: BorrowedFd<'_>, buffer: &[u8], fds: &[BorrowedFd<'_>]) -> std:
         ));
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "redox")))]
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos",
+        target_os = "watchos",
+        target_os = "redox"
+    )))]
     let flags = SendFlags::NOSIGNAL;
-    #[cfg(any(target_os = "macos", target_os = "redox"))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos",
+        target_os = "watchos",
+        target_os = "redox"
+    ))]
     let flags = SendFlags::empty();
 
     let sent = sendmsg(fd, &iov, &mut ancillary, flags)?;

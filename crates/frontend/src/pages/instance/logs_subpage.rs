@@ -8,7 +8,7 @@ use gpui_component::{
     button::{Button, ButtonVariants}, h_flex, select::{Select, SelectEvent, SelectState}, spinner::Spinner, v_flex, ActiveTheme as _, Sizable
 };
 
-use crate::{component::{named_dropdown::{NamedDropdown, NamedDropdownItem}, readonly_text_field::{ReadonlyTextField, ReadonlyTextFieldWithControls}}, entity::instance::InstanceEntry, icon::PandoraIcon, root};
+use crate::{component::{named_dropdown::{DropdownName, NamedDropdown, NamedDropdownItem}, readonly_text_field::{ReadonlyTextField, ReadonlyTextFieldWithControls}}, entity::instance::InstanceEntry, icon::PandoraIcon, root};
 
 pub struct InstanceLogsSubpage {
     instance: InstanceID,
@@ -71,7 +71,7 @@ impl InstanceLogsSubpage {
                 } else {
                     let items = result.paths.into_iter().filter_map(|path| {
                         Some(NamedDropdownItem {
-                            name: SharedString::new(Arc::from(path.file_name()?.to_string_lossy())),
+                            name: DropdownName::new(Arc::from(path.file_name()?.to_string_lossy())),
                             item: path,
                         })
                     }).collect();
@@ -79,7 +79,7 @@ impl InstanceLogsSubpage {
                     let dropdown = NamedDropdown::create(items, window, cx);
 
                     let _dropdown_change_subscrption = cx.subscribe_in(&dropdown, window, move |page, entity, _: &SelectEvent<NamedDropdown<Arc<Path>>>, window, cx| {
-                        let selected = entity.read(cx).selected_value().map(|item| item.item.clone());
+                        let selected = entity.read(cx).selected_value().cloned();
 
                         if selected == page.last_selected_path {
                             return;

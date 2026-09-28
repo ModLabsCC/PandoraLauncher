@@ -1,4 +1,14 @@
 use crate::prelude::*;
+#[cfg(any(
+    feature = "std",
+    feature = "hashbrown_0_14",
+    feature = "hashbrown_0_15",
+    feature = "hashbrown_0_16",
+    feature = "hashbrown_0_17",
+    feature = "indexmap_1",
+    feature = "indexmap_2"
+))]
+use crate::utils::size_hint_cautious;
 
 pub trait DuplicateInsertsFirstWinsMap<K, V> {
     fn new(size_hint: Option<usize>) -> Self;
@@ -15,10 +25,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
     }
 
     #[inline]
@@ -43,10 +50,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
     }
 
     #[inline]
@@ -71,10 +75,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
     }
 
     #[inline]
@@ -99,15 +100,37 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
     }
 
     #[inline]
     fn insert(&mut self, key: K, value: V) {
         use hashbrown_0_16::hash_map::Entry;
+
+        match self.entry(key) {
+            // we want to keep the first value, so do nothing
+            Entry::Occupied(_) => {}
+            Entry::Vacant(vacant) => {
+                vacant.insert(value);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "hashbrown_0_17")]
+impl<K, V, S> DuplicateInsertsFirstWinsMap<K, V> for hashbrown_0_17::HashMap<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher + Default,
+{
+    #[inline]
+    fn new(size_hint: Option<usize>) -> Self {
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
+    }
+
+    #[inline]
+    fn insert(&mut self, key: K, value: V) {
+        use hashbrown_0_17::hash_map::Entry;
 
         match self.entry(key) {
             // we want to keep the first value, so do nothing
@@ -127,10 +150,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
     }
 
     #[inline]
@@ -155,10 +175,7 @@ where
 {
     #[inline]
     fn new(size_hint: Option<usize>) -> Self {
-        match size_hint {
-            Some(size) => Self::with_capacity_and_hasher(size, S::default()),
-            None => Self::with_hasher(S::default()),
-        }
+        Self::with_capacity_and_hasher(size_hint_cautious::<(K, V)>(size_hint), S::default())
     }
 
     #[inline]

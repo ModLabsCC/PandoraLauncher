@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-2-Clause OR Apache-2.0 OR MIT
+//
 // Copyright 2024 The Fuchsia Authors
 //
 // Licensed under the 2-Clause BSD License <LICENSE-BSD or
@@ -60,6 +62,12 @@
 /// # Use in `const` contexts
 ///
 /// This macro can be invoked in `const` contexts.
+///
+#[doc = codegen_section!(
+    header = "h2",
+    bench = "transmute",
+    format = "coco_static_size",
+)]
 #[macro_export]
 macro_rules! transmute {
     // NOTE: This must be a macro (rather than a function with trait bounds)
@@ -312,6 +320,24 @@ macro_rules! transmute {
 ///
 /// This macro can be invoked in `const` contexts only when `Src: Sized` and
 /// `Dst: Sized`.
+///
+#[doc = codegen_section!(
+    header = "h2",
+    bench = "transmute_ref",
+    format = "coco",
+    arity = 2,
+    [
+        open
+        @index 1
+        @title "Sized"
+        @variant "static_size"
+    ],
+    [
+        @index 2
+        @title "Unsized"
+        @variant "dynamic_size"
+    ]
+)]
 #[macro_export]
 macro_rules! transmute_ref {
     ($e:expr) => {{
@@ -508,7 +534,6 @@ macro_rules! transmute_ref {
 /// assert_eq!(src.t.as_bytes(), [0, 1, 2, 3]);
 /// assert_eq!(src.u.len(), 2);
 /// assert_eq!(src.u.as_bytes(), [4, 5, 6, 7]);
-///
 /// ```
 #[macro_export]
 macro_rules! transmute_mut {
@@ -593,6 +618,12 @@ macro_rules! transmute_mut {
 ///     Result::<bool, _>::Err(ValidityError { .. })
 /// ));
 /// ```
+///
+#[doc = codegen_section!(
+    header = "h2",
+    bench = "try_transmute",
+    format = "coco_static_size",
+)]
 #[macro_export]
 macro_rules! try_transmute {
     ($e:expr) => {{
@@ -714,6 +745,24 @@ macro_rules! try_transmute {
 /// assert_eq!(dst.t.as_bytes(), [0, 1]);
 /// assert_eq!(dst.u, [false, true, false, true, false, true]);
 /// ```
+///
+#[doc = codegen_section!(
+    header = "h2",
+    bench = "try_transmute_ref",
+    format = "coco",
+    arity = 2,
+    [
+        open
+        @index 1
+        @title "Sized"
+        @variant "static_size"
+    ],
+    [
+        @index 2
+        @title "Unsized"
+        @variant "dynamic_size"
+    ]
+)]
 #[macro_export]
 macro_rules! try_transmute_ref {
     ($e:expr) => {{
@@ -1097,6 +1146,8 @@ macro_rules! cryptocorrosion_derive_traits {
     ) => {
         $crate::struct_padding!(
             Self,
+            None,
+            None,
             [
                 $($($tuple_field_ty),*)?
                 $($($field_ty),*)?
@@ -1179,6 +1230,8 @@ macro_rules! cryptocorrosion_derive_traits {
                 {
                     $crate::union_padding!(
                         Self,
+                        None::<usize>,
+                        None::<usize>,
                         [$($field_ty),*]
                     )
                 },

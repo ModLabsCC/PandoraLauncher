@@ -25,14 +25,15 @@ license = "Apache-2.0"
 
 [features]
 test-support = []
+wasm-threads = [
+    "dep:wasm_thread",
+    "flume/spin",
+]
 
 [lib]
 name = "scheduler"
 path = "src/scheduler.rs"
 doctest = false
-
-[dependencies]
-flume = "0.11"
 
 [dependencies.async-task]
 version = "4.7"
@@ -43,6 +44,9 @@ version = "0.3"
 [dependencies.chrono]
 version = "0.4"
 features = ["serde"]
+
+[dependencies.flume]
+version = "0.12"
 
 [dependencies.futures]
 version = "0.3.32"
@@ -55,6 +59,13 @@ version = "0.9"
 
 [dependencies.web-time]
 version = "1.1.0"
+
+[target.'cfg(target_family = "wasm")'.dependencies.wasm_thread]
+version = "0.3"
+git = "https://github.com/zed-industries/wasm_thread"
+rev = "0cf96c7708dfb97ccf3da50347e25edcf75d6937"
+features = ["es_modules"]
+optional = true
 
 [lints.clippy]
 dbg_macro = "deny"

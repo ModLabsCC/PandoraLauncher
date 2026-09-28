@@ -36,6 +36,9 @@ features = [
     "serde",
 ]
 
+[target.'cfg(target_os = "windows")'.dependencies.which]
+version = "8"
+
 [lints.clippy]
 dbg_macro = "deny"
 declare_interior_mutable_const = "deny"

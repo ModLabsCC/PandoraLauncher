@@ -391,6 +391,9 @@ macro_rules! fuzz_target {
 /// useful. Note that the two approaches are not mutually exclusive; you can use
 /// whichever is easier for your problem domain or both!
 ///
+/// > **Tip:** [The `mutatis` crate](https://docs.rs/mutatis) provides
+/// > abstractions and combinators for writing custom mutators.
+///
 /// ## Implementation Contract
 ///
 /// The original, unmodified input is given in `data[..size]`.

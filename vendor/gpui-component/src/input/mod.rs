@@ -1,38 +1,43 @@
-/// The character used to mask password input fields.
-pub(super) const MASK_CHAR: char = '•';
-
-mod blink_cursor;
-mod change;
 mod clear_button;
-mod cursor;
-mod display_map;
-mod element;
-mod indent;
+mod content_type;
 mod input;
-mod lsp;
-mod mask_pattern;
-mod mode;
-mod movement;
 mod number_input;
 mod otp_input;
+mod overlay;
 pub(crate) mod popovers;
-mod rope_ext;
 mod search;
-mod selection;
-mod state;
 
 pub(crate) use clear_button::*;
-pub use cursor::*;
-#[cfg(target_family = "wasm")]
-pub use display_map::folding::Tree;
-pub use display_map::{BufferPoint, DisplayMap, DisplayPoint, FoldRange};
-pub use indent::TabSize;
+pub use content_type::*;
+#[cfg(not(feature = "tree-sitter"))]
+pub struct Tree;
+/// The shared editing engine. Internal to the framework: components reach it
+/// through the concrete state of their control, never across the public API.
+pub(crate) use gpui_base::input::InputBaseState;
+pub use gpui_base::input::{
+    Backspace, BufferPoint, CodeActionItem, CodeActionProvider, CompletionMenuOptions,
+    CompletionProvider, Copy, Cut, DefinitionProvider, Delete, DeleteToBeginningOfLine,
+    DeleteToEndOfLine, DeleteToNextWordEnd, DeleteToPreviousWordStart, DisplayMap, DisplayPoint,
+    DocumentColorProvider, DocumentRangeSemanticTokensProvider, EditorState, Enter, Escape,
+    FoldRange, GoToDefinition, HighlightStyleResolver, HoverPopoverState, HoverProvider, Indent,
+    IndentInline, InputEdit, InputEvent, InputHighlighter, InputHighlighterFactory, InputState,
+    Lsp, MaskPattern, MoveDown, MoveEnd, MoveHome, MoveLeft, MovePageDown, MovePageUp, MoveRight,
+    MoveToEnd, MoveToEndOfLine, MoveToNextWord, MoveToPreviousWord, MoveToStart, MoveToStartOfLine,
+    MoveUp, Outdent, OutdentInline, Paste, Point, Redo, Replace, Rope, RopeExt, RopeLines, Search,
+    SelectAll, SelectToEnd, SelectToEndOfLine, SelectToNextWordEnd, SelectToPreviousWordStart,
+    SelectToStart, SelectToStartOfLine, Selection, ShowCharacterPalette, ShowDocumentHandler,
+    TabSize, TextDecoration, TextDecorationCollection, TextareaState, ToggleCodeActions, Undo,
+    WrappingIndent,
+};
+pub use gpui_base::input::{EditorMode, InputMode, InputModeKind, TextareaMode};
+#[doc(hidden)]
+mod editor;
+mod state;
+mod textarea;
+pub use editor::Editor;
 pub use input::*;
-pub use lsp::*;
 pub use lsp_types::Position;
-pub use mask_pattern::MaskPattern;
-pub use number_input::{NumberInput, NumberInputEvent, StepAction};
+pub use number_input::{NumberInput, NumberInputEvent, NumberStep, StepAction};
 pub use otp_input::*;
-pub use rope_ext::{InputEdit, Point, RopeExt, RopeLines};
-pub use ropey::Rope;
-pub use state::*;
+pub use state::AnyInputState;
+pub use textarea::Textarea;

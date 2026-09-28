@@ -1,5 +1,9 @@
 #![doc = core::include_str!("../README.md")]
 #![cfg_attr(not(any(test, feature = "rust-allocator")), no_std)]
+#![cfg_attr(
+    all(any(miri, feature = "lsx"), target_arch = "loongarch64"),
+    feature(stdarch_loongarch)
+)]
 
 #[cfg(any(feature = "rust-allocator", feature = "c-allocator"))]
 extern crate alloc;
@@ -39,6 +43,16 @@ pub use inflate::InflateConfig;
 
 pub use deflate::{compress_bound, compress_slice};
 pub use inflate::decompress_slice;
+
+macro_rules! traceln {
+    ($($arg:tt)*) => {
+        #[cfg(feature = "ZLIB_DEBUG")]
+        {
+            eprintln!($($arg)*)
+        }
+    };
+}
+pub(crate) use traceln;
 
 macro_rules! trace {
     ($($arg:tt)*) => {

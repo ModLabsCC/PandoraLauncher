@@ -4,7 +4,7 @@ use gpui::{prelude::*, *};
 use gpui_component::{Selectable, Sizable, button::Button, h_flex, slider::{Slider, SliderEvent, SliderState}, v_flex};
 use schema::{minecraft_profile::SkinVariant, unique_bytes::UniqueBytes};
 
-use crate::{component::player_model::{self, PlayerModel, PlayerModelState}, icon::PandoraIcon};
+use crate::{component::player_model::{self, PlayerModel, PlayerModelState}, icon::PandoraIcon, interface_config::InterfaceConfig};
 
 pub struct PlayerModelWidget {
     player_model_state: Entity<PlayerModelState>,
@@ -82,7 +82,9 @@ impl PlayerModelWidget {
     }
 
     fn on_yaw_changed(&mut self, _: Entity<SliderState>, event: &SliderEvent, cx: &mut Context<Self>) {
-        let SliderEvent::Change(change) = event;
+        let SliderEvent::Change(change) = event else {
+            return;
+        };
         self.animating_yaw = false;
         self.player_model_state.update(cx, |state, cx| {
             state.yaw = change.start() as f64;
@@ -91,7 +93,9 @@ impl PlayerModelWidget {
     }
 
     fn on_pitch_changed(&mut self, _: Entity<SliderState>, event: &SliderEvent, cx: &mut Context<Self>) {
-        let SliderEvent::Change(change) = event;
+        let SliderEvent::Change(change) = event else {
+            return;
+        };
         self.animating_pitch = false;
         self.player_model_state.update(cx, |state, cx| {
             state.pitch = change.start() as f64;
@@ -100,7 +104,9 @@ impl PlayerModelWidget {
     }
 
     fn on_animation_changed(&mut self, _: Entity<SliderState>, event: &SliderEvent, cx: &mut Context<Self>) {
-        let SliderEvent::Change(change) = event;
+        let SliderEvent::Change(change) = event else {
+            return;
+        };
         self.animating_animation = false;
         self.player_model_state.update(cx, |state, cx| {
             state.animation = change.start() as f64;
@@ -225,6 +231,17 @@ impl Render for PlayerModelWidget {
                         widget.last_drag = Some(event.event.position);
                     }
                 }))
+                .on_scroll_wheel(cx.listener({
+                    |widget, event: &ScrollWheelEvent, _, cx| {
+                        App::notify(cx, widget.player_model_state.entity_id());
+                        let delta = match event.delta {
+                            ScrollDelta::Pixels(pixels) => pixels.y.as_f32().signum() as i32,
+                            ScrollDelta::Lines(lines) => lines.y.signum() as i32,
+                        };
+                        let config = InterfaceConfig::get_mut(cx);
+                        config.player_model_zoom = (config.player_model_zoom + delta * 5).clamp(50, 400);
+                    }
+                }))
             )
             .child(v_flex().p_4().w_full()
                 .child(h_flex()
@@ -232,7 +249,7 @@ impl Render for PlayerModelWidget {
                     .gap_2()
                     .pb_2()
                     .child(Button::new("classic")
-                        .label("Classic")
+                        .label(t::skins::player_model::classic())
                         .flex_1()
                         .selected(self.variant == SkinVariant::Classic)
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -242,7 +259,7 @@ impl Render for PlayerModelWidget {
                             });
                         })))
                     .child(Button::new("slim")
-                        .label("Slim")
+                        .label(t::skins::player_model::slim())
                         .flex_1()
                         .selected(self.variant == SkinVariant::Slim)
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -253,7 +270,7 @@ impl Render for PlayerModelWidget {
                         }))))
                 .child(v_flex()
                     .child(h_flex().w_full().justify_between().text_sm()
-                        .child(format!("Yaw: {}°", yaw as i32))
+                        .child(t::skins::player_model::yaw(yaw as i32))
                         .child(Button::new("play-yaw").compact().small()
                             .icon(PandoraIcon::pause_play(self.animating_yaw))
                             .on_click(cx.listener(|widget, _, _, cx| {
@@ -264,7 +281,7 @@ impl Render for PlayerModelWidget {
                     .child(Slider::new(&self.yaw_slider_state)))
                 .child(v_flex()
                     .child(h_flex().w_full().justify_between().text_sm()
-                        .child(format!("Pitch: {}°", pitch as i32))
+                        .child(t::skins::player_model::pitch(pitch as i32))
                         .child(Button::new("play-pitch").compact().small()
                             .icon(PandoraIcon::pause_play(self.animating_pitch))
                             .on_click(cx.listener(|widget, _, _, cx| {
@@ -275,7 +292,7 @@ impl Render for PlayerModelWidget {
                     .child(Slider::new(&self.pitch_slider_state)))
                 .child(v_flex()
                     .child(h_flex().w_full().justify_between().text_sm()
-                        .child("Animation")
+                        .child(t::skins::player_model::animation())
                         .child(Button::new("play-anim").compact().small()
                             .icon(PandoraIcon::pause_play(self.animating_animation))
                             .on_click(cx.listener(|widget, _, _, cx| {

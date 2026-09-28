@@ -1,12 +1,50 @@
 # CHANGELOG: wayland-backend
 
-## Unreleased
+## 0.3.17 -- 2026-08-14
+
+Backport from `master`.
+
+#### Bugfixes
+- client/sys: Make `ReadEventsGuard` impl `Send+Sync`, like `rs` backend
+
+## 0.3.16 -- 2026-07-22
+
+Backport from `master`.
+
+#### Bugfixes
+- client/sys: Fix deadlock if `Backend` is used in `ObjectData::destroyed`
+- client/sys: Fix some race conditions accessing udata in a thread while it is
+  being set, or the proxy is being destroyed.
+
+## 0.3.15 -- 2026-03-30
+
+#### Bugfixes
+- server/rs: Fix potential deadlock destroying global udata
+- client/rs: Do not send request with destroyed object as argument
+  * Matches `client/sys`
+
+## 0.3.14 -- 2026-03-05
+
+- client: Put `ObjectId::display_ptr` behind `libwayland_client_1_23` feature
+  * Breaking change to fix issue with release
+
+## 0.3.13 -- 2026-03-04
+
+### Additions
+- client: Added `display_ptr` method to `ObjectId`
+- server: Addded `Handle::global_name`
+  * Requires `libwayland_server_1_22` feature
+- client: Added `set_max_buffer_size` method
+- server: Added `set_default_max_buffer_size` and `set_client_max_buffer_size` methods
 
 ## 0.3.12 -- 2025-12-30
 
 #### Bugfixes
 
 - backend/server/rs: Send protocol error if method requires newer protocol version
+
+#### Changes
+- backend/client/rs: Unbounded buffering, matching libwayland behavior
 
 ### Additions
 

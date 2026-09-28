@@ -12,15 +12,14 @@ use strum::IntoEnumIterator;
 
 use crate::{
     component::error_alert::ErrorAlert, entity::{
-        DataEntities, instance::ContentStates, metadata::{AsMetadataResult, FrontendMetadata, FrontendMetadataResult}
-    }, icon::PandoraIcon, pages::modrinth_page::{InstalledContent, PrimaryAction, env_display, get_primary_action, icon_for}, format_downloads
+        DataEntities, instance::ContentStates, metadata::{AsMetadataResult, FrontendMetadata, FrontendMetadataResult, FrontendMetadataState}
+    }, format_downloads, icon::PandoraIcon, pages::modrinth_page::{InstalledContent, PrimaryAction, env_display, get_primary_action, icon_for}
 };
 
 pub struct ModrinthProjectPage {
     data: DataEntities,
     project_id: SharedString,
     install_for: Option<InstanceID>,
-    loading: Option<Subscription>,
     project: Option<Arc<ModrinthProjectResult>>,
     error: Option<SharedString>,
     active_tab: usize,
@@ -28,6 +27,8 @@ pub struct ModrinthProjectPage {
     specific_installed_content: enum_map::EnumMap<ContentFolder, Vec<InstalledContent>>,
     all_installed_content: Vec<InstalledContent>,
     content_states: Option<ContentStates>,
+    _project_retry_task: Task<()>,
+    _project_subscription: Option<Subscription>,
 }
 
 impl ModrinthProjectPage {
@@ -53,31 +54,7 @@ impl ModrinthProjectPage {
                 can_install_latest = instance.configuration.loader != Loader::Vanilla;
 
                 for content_folder in ContentFolder::iter() {
-                    for summary in instance_content[content_folder].read(cx).iter() {
-                        let ContentSource::ModrinthProject { project_id: other_project_id } = &summary.content_source else {
-                            continue;
-                        };
-
-                        if project_id.as_str() != &**other_project_id {
-                            continue;
-                        }
-
-                        let installed_content = InstalledContent {
-                            content_id: summary.id,
-                            status: summary.update.status_if_matches(loader, minecraft_version.as_str()),
-                        };
-                        all_installed_content.push(installed_content);
-                        specific_installed_content[content_folder].push(installed_content);
-                    }
-
-                    let content = instance_content[content_folder].clone();
-                    let project_id = project_id.clone();
-                    cx.observe(&content, move |page, entity, cx| {
-                        let specific = &mut page.specific_installed_content[content_folder];
-
-                        specific.clear();
-
-                        let content = entity.read(cx);
+                    if let Some(content) = instance_content[content_folder].read(cx) {
                         for summary in content.iter() {
                             let ContentSource::ModrinthProject { project_id: other_project_id } = &summary.content_source else {
                                 continue;
@@ -87,10 +64,37 @@ impl ModrinthProjectPage {
                                 continue;
                             }
 
-                            specific.push(InstalledContent {
+                            let installed_content = InstalledContent {
                                 content_id: summary.id,
                                 status: summary.update.status_if_matches(loader, minecraft_version.as_str()),
-                            });
+                            };
+                            all_installed_content.push(installed_content);
+                            specific_installed_content[content_folder].push(installed_content);
+                        }
+                    }
+
+                    let content = instance_content[content_folder].clone();
+                    let project_id = project_id.clone();
+                    cx.observe(&content, move |page, entity, cx| {
+                        let specific = &mut page.specific_installed_content[content_folder];
+
+                        specific.clear();
+
+                        if let Some(content) = entity.read(cx) {
+                            for summary in content.iter() {
+                                let ContentSource::ModrinthProject { project_id: other_project_id } = &summary.content_source else {
+                                    continue;
+                                };
+
+                                if project_id.as_str() != &**other_project_id {
+                                    continue;
+                                }
+
+                                specific.push(InstalledContent {
+                                    content_id: summary.id,
+                                    status: summary.update.status_if_matches(loader, minecraft_version.as_str()),
+                                });
+                            }
                         }
 
                         page.all_installed_content.clear();
@@ -106,7 +110,6 @@ impl ModrinthProjectPage {
             data: data.clone(),
             project_id,
             install_for,
-            loading: None,
             project: None,
             error: None,
             active_tab: 0,
@@ -114,6 +117,8 @@ impl ModrinthProjectPage {
             specific_installed_content,
             all_installed_content,
             content_states,
+            _project_retry_task: Task::ready(()),
+            _project_subscription: None,
         };
         page.fetch_project(cx);
         page
@@ -130,33 +135,35 @@ impl ModrinthProjectPage {
 
         let state = FrontendMetadata::request(&self.data.metadata, request, cx);
 
+        self._project_subscription = Some(cx.observe(&state, |page, state, cx| {
+            page.update_project_from_metadata(state, cx);
+            cx.notify();
+        }));
+        self.update_project_from_metadata(state, cx);
+    }
+
+    fn update_project_from_metadata(&mut self, state: Entity<FrontendMetadataState>, cx: &mut Context<Self>) {
+        self.project = None;
+        self.error = None;
+
         let result: FrontendMetadataResult<ModrinthProjectResult> = state.read(cx).result();
         match result {
-            FrontendMetadataResult::Loading => {
-                let subscription = cx.observe(&state, |page, state, cx| {
-                    let result: FrontendMetadataResult<ModrinthProjectResult> =
-                        state.read(cx).result();
-                    match result {
-                        FrontendMetadataResult::Loading => {}
-                        FrontendMetadataResult::Loaded(project) => {
-                            page.project = Some(Arc::new(project.clone()));
-                            page.loading = None;
-                            cx.notify();
-                        }
-                        FrontendMetadataResult::Error(e) => {
-                            page.error = Some(e);
-                            page.loading = None;
-                            cx.notify();
-                        }
-                    }
-                });
-                self.loading = Some(subscription);
-            }
+            FrontendMetadataResult::Loading => {}
             FrontendMetadataResult::Loaded(project) => {
                 self.project = Some(Arc::new(project.clone()));
             }
-            FrontendMetadataResult::Error(e) => {
-                self.error = Some(e);
+            FrontendMetadataResult::Error(error, alive) => {
+                self.error = Some(error);
+
+                if let Some(alive) = alive {
+                    self._project_retry_task = cx.spawn(async move |page, cx| {
+                        alive.await_notification().await;
+                        let _ = page.update(cx, |page, cx| {
+                            page.fetch_project(cx);
+                            cx.notify();
+                        });
+                    });
+                }
             }
         }
     }
@@ -261,7 +268,7 @@ impl Render for ModrinthProjectPage {
                         let project_id_str = project_id_str.clone();
                         move |_, window, cx| {
                             if project_type != ModrinthProjectType::Other {
-                                primary_action.perform(project_name.as_str(), &project_id_str, project_type, install_for, &data, window, cx);
+                                primary_action.perform(project_name.clone(), &project_id_str, project_type, install_for, &data, window, cx);
                             } else {
                                 window.push_notification(
                                     (NotificationType::Error, t::instance::content::install::unknown_type()),
@@ -362,7 +369,7 @@ impl Render for ModrinthProjectPage {
                     let text = if gv.len() <= 5 {
                         gv.iter().map(|v| v.as_ref()).collect::<Vec<_>>().join(", ")
                     } else {
-                        format!("{} - {} ({} versions)",
+                        t::modrinth::versions::range(
                             gv.first().map(|v| v.as_ref()).unwrap_or(""),
                             gv.last().map(|v| v.as_ref()).unwrap_or(""),
                             gv.len())
@@ -392,7 +399,8 @@ impl Render for ModrinthProjectPage {
                 .when_some(license_el, |this, el| this.child(el))
                 .into_any_element();
 
-            let active_tab = self.active_tab;
+            let gallery = project.gallery.as_deref().filter(|images| !images.is_empty());
+            let active_tab = if self.active_tab == 1 && gallery.is_some() { 1 } else { 0 };
             let tabs_el: AnyElement = TabBar::new("content_tabs").underline()
                 .selected_index(active_tab)
                 .on_click(cx.listener(|this, selected_index: &usize, _window, cx| {
@@ -400,52 +408,43 @@ impl Render for ModrinthProjectPage {
                     cx.notify();
                 }))
                 .child(Tab::new().label(t::instance::content::tabs::description()))
-                .child(Tab::new().label(t::instance::content::tabs::gallery()))
+                .when(gallery.is_some(), |this| {
+                    this.child(Tab::new().label(t::instance::content::tabs::gallery()))
+                })
                 .into_any_element();
 
-            let body_el: AnyElement = match active_tab {
-                0 => {
-                    if let Some(body) = &project.body && !body.is_empty() {
-                        v_flex()
-                            .child(TextView::markdown("project_description", body.to_string()).gap_4())
-                            .into_any_element()
-                    } else {
-                        v_flex()
-                            .mt_2().pt_2()
-                            .child(div().text_sm().text_color(cx.theme().muted_foreground).child(t::instance::content::no_description()))
-                            .into_any_element()
-                    }
-                }
-                1 => {
-                    let gallery = project.gallery.as_deref().filter(|g| !g.is_empty());
-                    v_flex()
-                        .mt_2().pt_2()
-                        .child(if let Some(images) = gallery {
-                            h_flex()
-                                .flex_wrap()
-                                .gap_3()
-                                .children(images.iter().enumerate().map(|(idx, img)| {
-                                    v_flex().rounded_lg().h_80()
-                                        .child(gpui::img(SharedUri::from(&img.url))
-                                            .w_full()
-                                            .h_72()
-                                            .cursor_pointer()
-                                            .rounded_t_lg()
-                                            .id(("gallery_img", idx))
-                                            .on_click({
-                                                let url = img.url.clone();
-                                                move |_, _, cx| { cx.open_url(&url); }
-                                            }))
-                                        .child(v_flex().p_1().max_w_full().min_w_0()
-                                            .child(div().text_sm().child(SharedString::new(img.title.as_deref().unwrap_or_default())))
-                                        )
-                                })).into_any_element()
-                        } else {
-                            div().text_sm().text_color(cx.theme().muted_foreground).child(t::instance::content::no_gallery()).into_any_element()
-                        })
-                        .into_any_element()
-                }
-                _ => div().into_any_element(),
+            let body_el: AnyElement = if active_tab == 1 {
+                v_flex()
+                    .mt_2().pt_2()
+                    .child(h_flex()
+                        .flex_wrap()
+                        .gap_3()
+                        .children(gallery.into_iter().flatten().enumerate().map(|(idx, img)| {
+                            v_flex().rounded_lg().h_80()
+                                .child(gpui::img(SharedUri::from(&img.url))
+                                    .w_full()
+                                    .h_72()
+                                    .cursor_pointer()
+                                    .rounded_t_lg()
+                                    .id(("gallery_img", idx))
+                                    .on_click({
+                                        let url = img.url.clone();
+                                        move |_, _, cx| { cx.open_url(&url); }
+                                    }))
+                                .child(v_flex().p_1().max_w_full().min_w_0()
+                                    .child(div().text_sm().child(SharedString::new(img.title.as_deref().unwrap_or_default())))
+                                )
+                        })))
+                    .into_any_element()
+            } else if let Some(body) = &project.body && !body.is_empty() {
+                v_flex()
+                    .child(TextView::markdown("project_description", body.to_string()).gap_4())
+                    .into_any_element()
+            } else {
+                v_flex()
+                    .mt_2().pt_2()
+                    .child(div().text_sm().text_color(cx.theme().muted_foreground).child(t::instance::content::no_description()))
+                    .into_any_element()
             };
 
             v_flex().p_4().gap_3().w_full()

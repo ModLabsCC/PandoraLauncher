@@ -1,8 +1,7 @@
 //! This crate provides types for representing X.509 certificates, keys and other types as
 //! commonly used in the rustls ecosystem. It is intended to be used by crates that need to work
 //! with such X.509 types, such as [rustls](https://crates.io/crates/rustls),
-//! [rustls-webpki](https://crates.io/crates/rustls-webpki),
-//! [rustls-pemfile](https://crates.io/crates/rustls-pemfile), and others.
+//! [rustls-webpki](https://crates.io/crates/rustls-webpki), and others.
 //!
 //! Some of these crates used to define their own trivial wrappers around DER-encoded bytes.
 //! However, in order to avoid inconvenient dependency edges, these were all disconnected. By
@@ -787,7 +786,7 @@ impl SubjectPublicKeyInfoDer<'_> {
 }
 
 /// A TLS-encoded Encrypted Client Hello (ECH) configuration list (`ECHConfigList`); as specified in
-/// [draft-ietf-tls-esni-18 §4](https://datatracker.ietf.org/doc/html/draft-ietf-tls-esni-18#section-4)
+/// [RFC 9849 §4](https://datatracker.ietf.org/doc/html/rfc9849#section-4)
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct EchConfigListBytes<'a>(BytesInner<'a>);
 
@@ -1098,6 +1097,16 @@ pub enum FipsStatus {
     },
 }
 
+impl FipsStatus {
+    /// Construct a [`FipsStatus::Certified`].
+    ///
+    /// The argument should be a name, number or URL referencing the FIPS certificate.
+    /// This is for human presentation purposes, it is not for automated use.
+    pub const fn certified(certificate: &'static str) -> Self {
+        Self::Certified { certificate }
+    }
+}
+
 // Format an iterator of u8 into a hex string
 fn hex<'a>(f: &mut fmt::Formatter<'_>, payload: impl IntoIterator<Item = &'a u8>) -> fmt::Result {
     for (i, b) in payload.into_iter().enumerate() {
@@ -1123,6 +1132,12 @@ mod tests {
     fn alg_id_debug() {
         let alg_id = AlgorithmIdentifier::from_slice(&[0x01, 0x02, 0x03]);
         assert_eq!(format!("{alg_id:?}"), "0x010203");
+    }
+
+    #[test]
+    fn fips_status_debug() {
+        let fips = FipsStatus::certified("hello");
+        assert_eq!(format!("{fips:?}"), "Certified { certificate: \"hello\" }");
     }
 
     #[test]

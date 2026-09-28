@@ -549,7 +549,7 @@ impl<T> Arc<T> {
     ///
     /// // Create a long list and clone it
     /// let mut x = LinkedList::new();
-    /// let size = 100000;
+    /// let size = 100_000;
     /// # let size = if cfg!(miri) { 100 } else { size };
     /// for i in 0..size {
     ///     x.push(i); // Adds i to the front of x
@@ -2097,7 +2097,7 @@ impl<T> Default for Weak<T> {
     /// ```
     /// use portable_atomic_util::Weak;
     ///
-    /// let empty: Weak<i64> = Default::default();
+    /// let empty: Weak<i64> = Weak::default();
     /// assert!(empty.upgrade().is_none());
     /// ```
     fn default() -> Self {
@@ -2332,7 +2332,7 @@ impl<T: Default> Default for Arc<T> {
     /// ```
     /// use portable_atomic_util::Arc;
     ///
-    /// let x: Arc<i32> = Default::default();
+    /// let x: Arc<i32> = Arc::default();
     /// assert_eq!(*x, 0);
     /// ```
     fn default() -> Self {
@@ -2802,6 +2802,66 @@ impl<T: ?Sized + error::Error> error::Error for Arc<T> {
     }
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         error::Error::source(&**self)
+    }
+}
+
+#[cfg(feature = "serde")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+mod serde_impls {
+    use serde::{
+        de::{Deserialize, Deserializer},
+        ser::{Serialize, Serializer},
+    };
+
+    use super::{Arc, Box, Weak};
+
+    // Refs: https://github.com/serde-rs/serde/blob/v1.0.228/serde_core/src/ser/impls.rs#L472
+    impl<T: ?Sized + Serialize> Serialize for Arc<T> {
+        #[inline]
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            (**self).serialize(serializer)
+        }
+    }
+
+    // Refs: https://github.com/serde-rs/serde/blob/v1.0.228/serde_core/src/ser/impls.rs#L564
+    impl<T: ?Sized + Serialize> Serialize for Weak<T> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            self.upgrade().serialize(serializer)
+        }
+    }
+
+    // Refs: https://github.com/serde-rs/serde/blob/v1.0.228/serde_core/src/de/impls.rs#L2057
+    impl<'de, T> Deserialize<'de> for Arc<T>
+    where
+        T: ?Sized,
+        Box<T>: Deserialize<'de>,
+    {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            Box::deserialize(deserializer).map(Into::into)
+        }
+    }
+
+    // Refs: https://github.com/serde-rs/serde/blob/v1.0.228/serde_core/src/de/impls.rs#L2035
+    impl<'de, T> Deserialize<'de> for Weak<T>
+    where
+        T: Deserialize<'de>,
+    {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            Option::<T>::deserialize(deserializer)?;
+            Ok(Weak::new())
+        }
     }
 }
 

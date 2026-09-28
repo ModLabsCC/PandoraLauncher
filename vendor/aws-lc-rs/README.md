@@ -54,7 +54,7 @@ latest version of the AWS-LC-FIPS module that has completed FIPS validation test
 accredited lab and has been submitted to NIST for certification. This will continue to be the
 case as we periodically submit new versions of the AWS-LC-FIPS module to NIST for certification.
 Currently, aws-lc-fips-sys binds to
-[AWS-LC-FIPS 3.0.x](https://github.com/aws/aws-lc/tree/fips-2024-09-27).
+[AWS-LC-FIPS 4.x](https://github.com/aws/aws-lc/tree/fips-2025-09-12-lts).
 
 Consult with your local FIPS compliance team to determine the version of AWS-LC-FIPS module that you require. Consumers
 needing to remain on a previous version of the AWS-LC-FIPS module should pin to specific versions of aws-lc-rs to avoid
@@ -65,7 +65,8 @@ on how to specify dependency versions.)
 | AWS-LC-FIPS module | aws-lc-rs |
 |--------------------|-----------|
 | 2.0.x              | \<1.12.0  |
-| 3.0.x              | *latest*  |
+| 3.0.x              | \<1.18.0  |
+| 4.x                | *latest*  |
 
 Refer to the
 [NIST Cryptographic Module Validation Program's Modules In Progress List](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/Modules-In-Process-List)
@@ -105,6 +106,56 @@ Use of prebuilt NASM objects is prevented if either of the following conditions 
 
 Be aware that [features are additive](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification);
 by enabling this feature, it is enabled for all crates within the same build.
+
+##### dev-tests-only
+
+Enables the `rand::unsealed` module, which re-exports the normally sealed `SecureRandom` trait.
+This allows consumers to provide their own implementations of `SecureRandom` (e.g., a
+deterministic RNG) for testing purposes. When enabled, a `mut_fill` method is also available on
+`SecureRandom`.
+
+This feature is restricted to **dev/debug profile builds only** — attempting to use it in a
+release build will result in a compile-time error.
+
+It can be enabled in two ways:
+* **Feature flag:** `cargo test --features dev-tests-only`
+* **Environment variable:** `AWS_LC_RS_DEV_TESTS_ONLY=1 cargo test`
+
+**⚠️ Warning:** This feature is intended **only** for development and testing. It must not be
+used in production builds. The `rand::unsealed` module and `mut_fill` method are not part of the
+stable public API and may change without notice.
+
+##### legacy-des
+
+Enables single DES and Triple DES as opt-in symmetric ciphers under the `cipher`
+module, exposing `DES_FOR_LEGACY_USE_ONLY` (single DES),
+`DES_EDE_FOR_LEGACY_USE_ONLY` (2-key Triple DES / DES-EDE) and
+`DES_EDE3_FOR_LEGACY_USE_ONLY` (3-key Triple DES / DES-EDE3), together with the
+supporting key-length and IV-length constants. Only CBC and ECB operating modes are
+supported.
+
+**⚠️ Warning:** Single DES and Triple DES are legacy algorithms. Single DES
+provides only 56 bits of effective security and has been considered insecure for
+decades. Triple DES has been disallowed for encryption by
+[NIST SP 800-131A Rev. 2](https://csrc.nist.gov/publications/detail/sp/800-131a/rev-2/final):
+2-key Triple DES after 2015, and 3-key Triple DES after 2023. This feature exists
+solely to support interoperability. All exposed items are marked `#[deprecated]`
+so that any use site produces a compiler warning. **Do not use single DES or Triple
+DES in new designs.** If you only need confidentiality, prefer AES-GCM or another
+AEAD from the `aead` module; if you specifically need a block cipher, prefer one
+of the AES algorithms in `cipher`.
+
+**Build-time impact:** The default `aws-lc-sys` bindings do not expose the low-level `DES_*`
+symbols this feature relies on, so enabling `legacy-des` also enables `aws-lc-sys?/all-bindings`.
+Concretely:
+
+* On platforms with pre-generated per-target bindings, the build switches from the universal
+  bindings to the per-target bindings (no extra tooling required).
+* On platforms *without* pre-generated bindings for the selected target, `bindgen` is invoked at
+  build time, which requires `libclang` to be installed in the build environment.
+
+Because [features are additive](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification),
+enabling `legacy-des` anywhere in your dependency graph applies the above to the entire build.
 
 ## Use of prebuilt NASM objects
 

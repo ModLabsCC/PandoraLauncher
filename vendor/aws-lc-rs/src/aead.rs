@@ -736,6 +736,37 @@ impl LessSafeKey {
         self.open_within(nonce, aad, in_out, 0..)
     }
 
+    /// Like [`OpeningKey::open_in_place()`], except the authentication tag is
+    /// passed separately.
+    ///
+    /// `in_out` contains the ciphertext on input and is overwritten with the
+    /// plaintext on success. `tag` is the authentication tag, e.g. as produced
+    /// by [`Self::seal_in_place_separate_tag()`].
+    ///
+    /// `nonce` must be unique for every use of the key to open data.
+    // # FIPS
+    // This method must not be used.
+    //
+    /// # Errors
+    /// `error::Unspecified` when ciphertext is invalid. In this case, `in_out` may
+    /// have been overwritten in an unspecified way.
+    #[inline]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn open_in_place_separate_tag<'in_out, A>(
+        &self,
+        nonce: Nonce,
+        aad: Aad<A>,
+        tag: &[u8],
+        in_out: &'in_out mut [u8],
+    ) -> Result<&'in_out mut [u8], Unspecified>
+    where
+        A: AsRef<[u8]>,
+    {
+        self.key
+            .open_in_place_separate_tag(&nonce, aad.as_ref(), tag, in_out)?;
+        Ok(in_out)
+    }
+
     /// Like [`OpeningKey::open_within()`], except it accepts an arbitrary nonce.
     ///
     /// `nonce` must be unique for every use of the key to open data.
@@ -764,7 +795,7 @@ impl LessSafeKey {
             .open_within(nonce, aad.as_ref(), in_out, ciphertext_and_tag)
     }
 
-    /// Authenticates and decrypts (“opens”) data into another provided slice.
+    /// Authenticates and decrypts ("opens") data into another provided slice.
     ///
     /// `aad` is the additional authenticated data (AAD), if any.
     ///
@@ -868,6 +899,54 @@ impl LessSafeKey {
         self.key
             .seal_in_place_separate_tag(Some(nonce), aad.as_ref(), in_out)
             .map(|(_, tag)| tag)
+    }
+
+    /// Encrypts and signs (“seals”) `in_plaintext` into the separate `out_ciphertext`
+    /// buffer, leaving `in_plaintext` untouched.
+    ///
+    /// This is the out-of-place counterpart to [`Self::seal_in_place_scatter`], and the
+    /// sealing counterpart to [`Self::open_separate_gather`].
+    ///
+    /// `aad` is the additional authenticated data (AAD), if any. This is authenticated
+    /// but not encrypted. If there is no AAD then use `Aad::empty()`.
+    ///
+    /// `out_ciphertext` must be exactly `in_plaintext.len()` bytes. `extra_in` is
+    /// additional plaintext, such as TLS 1.3's inner content-type byte, that is
+    /// encrypted into `extra_out_and_tag` ahead of the tag, so `extra_out_and_tag` must
+    /// be `extra_in.len() + self.algorithm().tag_len()` bytes. A caller with no extra
+    /// plaintext passes an empty `extra_in` and an `extra_out_and_tag` of
+    /// `self.algorithm().tag_len()` bytes.
+    ///
+    /// `nonce` must be unique for every use of the key to seal data.
+    // # FIPS
+    // This method must not be used.
+    //
+    /// # Errors
+    /// `error::Unspecified` if the buffer lengths are wrong or the encryption operation
+    /// fails. A length mismatch is rejected before the AEAD runs, leaving both output
+    /// buffers untouched.
+    #[inline]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn seal_out_of_place_scatter<A>(
+        &self,
+        nonce: Nonce,
+        aad: Aad<A>,
+        in_plaintext: &[u8],
+        out_ciphertext: &mut [u8],
+        extra_in: &[u8],
+        extra_out_and_tag: &mut [u8],
+    ) -> Result<(), Unspecified>
+    where
+        A: AsRef<[u8]>,
+    {
+        self.key.seal_out_of_place_scatter(
+            nonce,
+            aad.as_ref(),
+            in_plaintext,
+            out_ciphertext,
+            extra_in,
+            extra_out_and_tag,
+        )
     }
 
     /// Encrypts and signs (“seals”) data in place with extra plaintext.

@@ -28,6 +28,7 @@ impl<'de, 'sig, 'f, F> Deserializer<'de, 'sig, 'f, F> {
         ctxt: Context,
     ) -> Result<Self> {
         assert_eq!(ctxt.format(), Format::DBus);
+        super::reject_maybe(signature)?;
 
         Ok(Self(DeserializerCommon {
             ctxt,
@@ -236,6 +237,11 @@ impl<'de, #[cfg(unix)] F: AsFd, #[cfg(not(unix))] F> de::Deserializer<'de>
         self.0.pos += 1; // skip trailing null byte
         let s = str::from_utf8(slice).map_err(Error::Utf8)?;
 
+        // A `g` or `v` value carries a signature; a maybe type in it is not valid D-Bus.
+        if matches!(self.0.signature, Signature::Signature | Signature::Variant) {
+            super::reject_maybe_in_signature_str(slice)?;
+        }
+
         visitor.visit_borrowed_str(s)
     }
 
@@ -348,7 +354,9 @@ impl<'de, #[cfg(unix)] F: AsFd, #[cfg(not(unix))] F> de::Deserializer<'de>
         V: Visitor<'de>,
     {
         match self.0.signature {
-            Signature::Str => self.deserialize_str(visitor),
+            Signature::Str | Signature::ObjectPath | Signature::Signature => {
+                self.deserialize_str(visitor)
+            }
             Signature::U32 => self.deserialize_u32(visitor),
             Signature::Structure(fields) => {
                 let mut fields = fields.iter();
@@ -597,7 +605,7 @@ impl<'de, #[cfg(unix)] F: AsFd, #[cfg(not(unix))] F> SeqAccess<'de>
         let signature = self.de.0.signature;
         let field_signature = match signature {
             Signature::Structure(fields) => {
-                let signature = fields.iter().nth(self.field_idx).ok_or_else(|| {
+                let signature = fields.get(self.field_idx).ok_or_else(|| {
                     Error::SignatureMismatch(signature.clone(), "a struct".to_string())
                 })?;
                 self.field_idx += 1;
@@ -679,6 +687,7 @@ impl<'de, #[cfg(unix)] F: AsFd, #[cfg(not(unix))] F> SeqAccess<'de>
 
                 let slice = subslice(self.de.0.bytes, sig_start..sig_end)?;
                 let signature = Signature::from_bytes(slice)?;
+                super::reject_maybe(&signature)?;
 
                 let ctxt = Context::new(
                     Format::DBus,

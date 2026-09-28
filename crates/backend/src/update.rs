@@ -1,7 +1,7 @@
 use std::{ffi::{OsStr, OsString}, io::Cursor, path::{Path, PathBuf}, sync::Arc};
 
 use base64::Engine;
-use bridge::{handle::FrontendHandle, message::MessageToFrontend, modal_action::{ModalAction, ProgressTracker}};
+use bridge::{handle::FrontendHandle, message::MessageToFrontend, modal_action::ModalAction};
 use reqwest::StatusCode;
 use schema::pandora_update::{UpdateInstallType, UpdateManifest, UpdatePrompt};
 use sha1::{Digest, Sha1};
@@ -142,7 +142,7 @@ fn determine_macos_app_path(current_exe: &Path) -> Option<&Path> {
 
 pub async fn install_update(http_client: reqwest::Client, dirs: Arc<LauncherDirectories>, send: FrontendHandle, update: UpdatePrompt, modal_action: ModalAction) {
     if let Err(error) = install_update_inner(http_client, &dirs, send.clone(), update, modal_action.clone()).await {
-        modal_action.set_error_message(error);
+        modal_action.set_finished_with_error(error);
     }
 
     modal_action.set_finished();
@@ -151,8 +151,7 @@ pub async fn install_update(http_client: reqwest::Client, dirs: Arc<LauncherDire
 
 async fn install_update_inner(http_client: reqwest::Client, dirs: &LauncherDirectories, send: FrontendHandle, update: UpdatePrompt, modal_action: ModalAction) -> Result<(), Arc<str>> {
     let title = format!("Downloading Pandora {}", update.new_version);
-    let tracker = ProgressTracker::new(title.into(), send.clone());
-    modal_action.trackers.push(tracker.clone());
+    let tracker = modal_action.push_tracker(title.into());
 
     let mut expected_hash = [0u8; 20];
     let Ok(_) = hex::decode_to_slice(&*update.exe.sha1, &mut expected_hash) else {
@@ -168,7 +167,6 @@ async fn install_update_inner(http_client: reqwest::Client, dirs: &LauncherDirec
     }
 
     tracker.set_total(update.exe.size);
-    tracker.notify();
 
     use futures::StreamExt;
     let mut stream = response.bytes_stream();
@@ -182,7 +180,6 @@ async fn install_update_inner(http_client: reqwest::Client, dirs: &LauncherDirec
 
         bytes.extend_from_slice(&*item);
         tracker.add_count(item.len());
-        tracker.notify();
     }
 
     let mut hasher = Sha1::new();

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-2-Clause OR Apache-2.0 OR MIT
+//
 // Copyright 2018 The Fuchsia Authors
 //
 // Licensed under the 2-Clause BSD License <LICENSE-BSD or
@@ -10,7 +12,7 @@
 // After updating the following doc comment, make sure to run the following
 // command to update `README.md` based on its contents:
 //
-//   cargo -q run --manifest-path tools/Cargo.toml -p generate-readme > README.md
+//   (cd .. && cargo -q run --manifest-path tools/Cargo.toml -p generate-readme) > README.md
 
 //! ***<span style="font-size: 140%">Fast, safe, <span
 //! style="color:red;">compile error</span>. Pick two.</span>***
@@ -141,6 +143,15 @@
 //! [duplicate-import-errors]: https://github.com/google/zerocopy/issues/1587
 //! [simd-layout]: https://rust-lang.github.io/unsafe-code-guidelines/layout/packed-simd-vectors.html
 //!
+//! # Build Tuning
+//!
+//! ## `--cfg zerocopy_inline_always`
+//!
+//! Upgrades `#[inline]` to `#[inline(always)]` on many of zerocopy's public
+//! functions and methods. This provides a narrowly-scoped alternative that
+//! *may* improve the optimization of hot paths using zerocopy without the broad
+//! compile-time penalties of configuring `codegen-units=1`.
+//!
 //! # Security Ethos
 //!
 //! Zerocopy is expressly designed for use in security-critical contexts. We
@@ -163,7 +174,7 @@
 //!
 //! [Miri]: https://github.com/rust-lang/miri
 //! [Kani]: https://github.com/model-checking/kani
-//! [soundness policy]: https://github.com/google/zerocopy/blob/main/POLICIES.md#soundness
+//! [soundness policy]: https://github.com/google/zerocopy/blob/main/zerocopy/POLICIES.md#soundness
 //!
 //! # Relationship to Project Safe Transmute
 //!
@@ -192,7 +203,7 @@
 //!
 //! See our [MSRV policy].
 //!
-//! [MSRV policy]: https://github.com/google/zerocopy/blob/main/POLICIES.md#msrv
+//! [MSRV policy]: https://github.com/google/zerocopy/blob/main/zerocopy/POLICIES.md#msrv
 //!
 //! # Changelog
 //!
@@ -350,7 +361,8 @@ mod impls;
 #[doc(hidden)]
 pub mod layout;
 mod macros;
-#[doc(hidden)]
+#[cfg_attr(not(zerocopy_unstable_ptr), doc(hidden))]
+#[cfg_attr(doc_cfg, doc(cfg(zerocopy_unstable_ptr)))]
 pub mod pointer;
 mod r#ref;
 mod split_at;
@@ -376,9 +388,10 @@ use core::{
 use std::io;
 
 #[doc(hidden)]
-pub use crate::pointer::invariant::{self, BecauseExclusive};
-#[doc(hidden)]
-pub use crate::pointer::PtrInner;
+pub use crate::pointer::{
+    invariant::{self, BecauseExclusive},
+    PtrInner,
+};
 pub use crate::{
     byte_slice::*,
     byteorder::*,
@@ -388,14 +401,12 @@ pub use crate::{
     wrappers::*,
 };
 
-#[cfg(any(feature = "alloc", test, kani))]
+#[cfg(any(feature = "alloc", test))]
 extern crate alloc;
 #[cfg(any(feature = "alloc", test))]
 use alloc::{boxed::Box, vec::Vec};
 #[cfg(any(feature = "alloc", test))]
 use core::alloc::Layout;
-
-use util::MetadataOf;
 
 // Used by `KnownLayout`.
 #[doc(hidden)]
@@ -411,6 +422,9 @@ pub use crate::pointer::{invariant::BecauseImmutable, Maybe, Ptr};
 // See the documentation on `util::polyfills` for more information.
 #[allow(unused_imports)]
 use crate::util::polyfills::{self, NonNullExt as _, NumExt as _};
+#[cfg_attr(not(zerocopy_unstable_ptr), doc(hidden))]
+#[cfg_attr(doc_cfg, doc(cfg(zerocopy_unstable_ptr)))]
+pub use crate::util::MetadataOf;
 
 #[cfg(all(test, not(__ZEROCOPY_INTERNAL_USE_ONLY_DEV_MODE)))]
 const _: () = {
@@ -421,6 +435,8 @@ const _: () = {
     WARNING
 };
 
+#[cfg(all(any(feature = "derive", test), zerocopy_unstable_linux))]
+pub use zerocopy_derive::most_traits;
 /// Implements [`KnownLayout`].
 ///
 /// This derive analyzes various aspects of a type's layout that are needed for
@@ -854,6 +870,19 @@ pub unsafe trait KnownLayout {
     fn size_for_metadata(meta: Self::PointerMetadata) -> Option<usize> {
         meta.size_for_metadata(Self::LAYOUT)
     }
+
+    /// Computes whether `meta` can describe a valid allocation of `Self`.
+    ///
+    /// # Safety
+    ///
+    /// `is_valid_metadata` promises to return `true` if and only if the size of
+    /// an allocation of `Self` with `meta` would not overflow an
+    /// [`isize::MAX`].
+    #[doc(hidden)]
+    #[inline(always)]
+    fn is_valid_metadata(meta: Self::PointerMetadata) -> bool {
+        meta.to_elem_count() <= maximum_trailing_slice_len::<Self>().to_elem_count()
+    }
 }
 
 /// Efficiently produces the [`TrailingSliceLayout`] of `T`.
@@ -879,9 +908,39 @@ where
     T::SIZE_INFO
 }
 
+/// Efficiently produces the maximum trailing slice length `T`.
+#[inline(always)]
+pub(crate) fn maximum_trailing_slice_len<T>() -> usize
+where
+    T: ?Sized + KnownLayout,
+{
+    trait LayoutFacts {
+        const MAX_LEN: usize;
+    }
+
+    impl<T: ?Sized> LayoutFacts for T
+    where
+        T: KnownLayout,
+    {
+        const MAX_LEN: usize = match T::LAYOUT.size_info {
+            SizeInfo::SliceDst(TrailingSliceLayout { elem_size: 0, .. }) => usize::MAX,
+            _ => match T::LAYOUT.validate_cast_and_convert_metadata(
+                T::LAYOUT.align.get(),
+                DstLayout::MAX_SIZE,
+                CastType::Prefix,
+            ) {
+                Ok((elems, _)) => elems,
+                Err(_) => const_panic!("unreachable"),
+            },
+        };
+    }
+
+    T::MAX_LEN
+}
+
 /// The metadata associated with a [`KnownLayout`] type.
 #[doc(hidden)]
-pub trait PointerMetadata: Copy + Eq + Debug {
+pub trait PointerMetadata: Copy + Eq + Debug + Ord {
     /// Constructs a `Self` from an element count.
     ///
     /// If `Self = ()`, this returns `()`. If `Self = usize`, this returns
@@ -1790,8 +1849,32 @@ pub unsafe trait TryFromBytes {
     /// let bytes = &[0x10, 0xC0, 240, 77, 0, 1, 2, 3, 4, 5][..];
     /// assert!(Packet::try_ref_from_bytes(bytes).is_err());
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "try_ref_from_bytes",
+        format = "coco",
+        arity = 3,
+        [
+            open
+            @index 1
+            @title "Sized"
+            @variant "static_size"
+        ],
+        [
+            @index 2
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 3
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_ref_from_bytes(source: &[u8]) -> Result<&Self, TryCastError<&[u8], Self>>
     where
         Self: KnownLayout + Immutable,
@@ -1889,8 +1972,32 @@ pub unsafe trait TryFromBytes {
     /// let bytes = &[0x10, 0xC0, 240, 77, 0, 1, 2, 3, 4, 5, 6][..];
     /// assert!(Packet::try_ref_from_prefix(bytes).is_err());
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "try_ref_from_prefix",
+        format = "coco",
+        arity = 3,
+        [
+            open
+            @index 1
+            @title "Sized"
+            @variant "static_size"
+        ],
+        [
+            @index 2
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 3
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_ref_from_prefix(source: &[u8]) -> Result<(&Self, &[u8]), TryCastError<&[u8], Self>>
     where
         Self: KnownLayout + Immutable,
@@ -1975,8 +2082,32 @@ pub unsafe trait TryFromBytes {
     /// let bytes = &[0, 1, 2, 3, 4, 5, 6, 77, 240, 0xC0, 0x10][..];
     /// assert!(Packet::try_ref_from_suffix(bytes).is_err());
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "try_ref_from_suffix",
+        format = "coco",
+        arity = 3,
+        [
+            open
+            @index 1
+            @title "Sized"
+            @variant "static_size"
+        ],
+        [
+            @index 2
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 3
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_ref_from_suffix(source: &[u8]) -> Result<(&[u8], &Self), TryCastError<&[u8], Self>>
     where
         Self: KnownLayout + Immutable,
@@ -2064,8 +2195,13 @@ pub unsafe trait TryFromBytes {
     /// let bytes = &mut [0x10, 0xC0, 240, 77, 0, 1, 2, 3, 4, 5, 6][..];
     /// assert!(Packet::try_mut_from_bytes(bytes).is_err());
     /// ```
+    ///
+    #[doc = codegen_header!("h5", "try_mut_from_bytes")]
+    ///
+    /// See [`TryFromBytes::try_ref_from_bytes`](#method.try_ref_from_bytes.codegen).
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_mut_from_bytes(bytes: &mut [u8]) -> Result<&mut Self, TryCastError<&mut [u8], Self>>
     where
         Self: KnownLayout + IntoBytes,
@@ -2168,8 +2304,13 @@ pub unsafe trait TryFromBytes {
     /// let bytes = &mut [0x10, 0xC0, 240, 77, 0, 1, 2, 3, 4, 5, 6][..];
     /// assert!(Packet::try_mut_from_prefix(bytes).is_err());
     /// ```
+    ///
+    #[doc = codegen_header!("h5", "try_mut_from_prefix")]
+    ///
+    /// See [`TryFromBytes::try_ref_from_prefix`](#method.try_ref_from_prefix.codegen).
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_mut_from_prefix(
         source: &mut [u8],
     ) -> Result<(&mut Self, &mut [u8]), TryCastError<&mut [u8], Self>>
@@ -2263,8 +2404,13 @@ pub unsafe trait TryFromBytes {
     /// let bytes = &mut [0, 1, 2, 3, 4, 5, 6, 77, 240, 0xC0, 0x10][..];
     /// assert!(Packet::try_mut_from_suffix(bytes).is_err());
     /// ```
+    ///
+    #[doc = codegen_header!("h5", "try_mut_from_suffix")]
+    ///
+    /// See [`TryFromBytes::try_ref_from_suffix`](#method.try_ref_from_suffix.codegen).
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_mut_from_suffix(
         source: &mut [u8],
     ) -> Result<(&mut [u8], &mut Self), TryCastError<&mut [u8], Self>>
@@ -2349,8 +2495,27 @@ pub unsafe trait TryFromBytes {
     /// ```
     ///
     /// [`try_ref_from_bytes`]: TryFromBytes::try_ref_from_bytes
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "try_ref_from_bytes_with_elems",
+        format = "coco",
+        arity = 2,
+        [
+            open
+            @index 1
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 2
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_ref_from_bytes_with_elems(
         source: &[u8],
         count: usize,
@@ -2451,8 +2616,27 @@ pub unsafe trait TryFromBytes {
     /// ```
     ///
     /// [`try_ref_from_prefix`]: TryFromBytes::try_ref_from_prefix
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "try_ref_from_prefix_with_elems",
+        format = "coco",
+        arity = 2,
+        [
+            open
+            @index 1
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 2
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_ref_from_prefix_with_elems(
         source: &[u8],
         count: usize,
@@ -2540,8 +2724,27 @@ pub unsafe trait TryFromBytes {
     /// ```
     ///
     /// [`try_ref_from_prefix`]: TryFromBytes::try_ref_from_prefix
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "try_ref_from_suffix_with_elems",
+        format = "coco",
+        arity = 2,
+        [
+            open
+            @index 1
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 2
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_ref_from_suffix_with_elems(
         source: &[u8],
         count: usize,
@@ -2631,8 +2834,13 @@ pub unsafe trait TryFromBytes {
     /// ```
     ///
     /// [`try_mut_from_bytes`]: TryFromBytes::try_mut_from_bytes
+    ///
+    #[doc = codegen_header!("h5", "try_mut_from_bytes_with_elems")]
+    ///
+    /// See [`TryFromBytes::try_ref_from_bytes_with_elems`](#method.try_ref_from_bytes_with_elems.codegen).
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_mut_from_bytes_with_elems(
         source: &mut [u8],
         count: usize,
@@ -2737,8 +2945,13 @@ pub unsafe trait TryFromBytes {
     /// ```
     ///
     /// [`try_mut_from_prefix`]: TryFromBytes::try_mut_from_prefix
+    ///
+    #[doc = codegen_header!("h5", "try_mut_from_prefix_with_elems")]
+    ///
+    /// See [`TryFromBytes::try_ref_from_prefix_with_elems`](#method.try_ref_from_prefix_with_elems.codegen).
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_mut_from_prefix_with_elems(
         source: &mut [u8],
         count: usize,
@@ -2832,8 +3045,13 @@ pub unsafe trait TryFromBytes {
     /// ```
     ///
     /// [`try_mut_from_prefix`]: TryFromBytes::try_mut_from_prefix
+    ///
+    #[doc = codegen_header!("h5", "try_mut_from_suffix_with_elems")]
+    ///
+    /// See [`TryFromBytes::try_ref_from_suffix_with_elems`](#method.try_ref_from_suffix_with_elems.codegen).
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_mut_from_suffix_with_elems(
         source: &mut [u8],
         count: usize,
@@ -2892,8 +3110,15 @@ pub unsafe trait TryFromBytes {
     /// is a valid `Self`. This ensures that validation can be performed using
     /// aligned reads (which carry a performance advantage over unaligned reads
     /// on many platforms) at the cost of an unconditional copy.
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "try_read_from_bytes",
+        format = "coco_static_size",
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_read_from_bytes(source: &[u8]) -> Result<Self, TryReadError<&[u8], Self>>
     where
         Self: Sized,
@@ -2963,8 +3188,15 @@ pub unsafe trait TryFromBytes {
     /// is a valid `Self`. This ensures that validation can be performed using
     /// aligned reads (which carry a performance advantage over unaligned reads
     /// on many platforms) at the cost of an unconditional copy.
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "try_read_from_prefix",
+        format = "coco_static_size",
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_read_from_prefix(source: &[u8]) -> Result<(Self, &[u8]), TryReadError<&[u8], Self>>
     where
         Self: Sized,
@@ -3035,8 +3267,15 @@ pub unsafe trait TryFromBytes {
     /// is a valid `Self`. This ensures that validation can be performed using
     /// aligned reads (which carry a performance advantage over unaligned reads
     /// on many platforms) at the cost of an unconditional copy.
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "try_read_from_suffix",
+        format = "coco_static_size",
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn try_read_from_suffix(source: &[u8]) -> Result<(&[u8], Self), TryReadError<&[u8], Self>>
     where
         Self: Sized,
@@ -3269,6 +3508,29 @@ pub unsafe trait FromZeros: TryFromBytes {
     /// assert_eq!(header.length, [0, 0]);
     /// assert_eq!(header.checksum, [0, 0]);
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "zero",
+        format = "coco",
+        arity = 3,
+        [
+            open
+            @index 1
+            @title "Sized"
+            @variant "static_size"
+        ],
+        [
+            @index 2
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 3
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[inline(always)]
     fn zero(&mut self) {
         let slf: *mut Self = self;
@@ -3309,6 +3571,12 @@ pub unsafe trait FromZeros: TryFromBytes {
     /// assert_eq!(header.length, [0, 0]);
     /// assert_eq!(header.checksum, [0, 0]);
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "new_zeroed",
+        format = "coco_static_size",
+    )]
     #[must_use = "has no side effects"]
     #[inline(always)]
     fn new_zeroed() -> Self
@@ -3335,6 +3603,12 @@ pub unsafe trait FromZeros: TryFromBytes {
     ///
     /// Returns an error on allocation failure. Allocation failure is guaranteed
     /// never to cause a panic or an abort.
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "new_box_zeroed",
+        format = "coco_static_size",
+    )]
     #[must_use = "has no side effects (other than allocation)"]
     #[cfg(any(feature = "alloc", test))]
     #[cfg_attr(doc_cfg, doc(cfg(feature = "alloc")))]
@@ -3400,6 +3674,24 @@ pub unsafe trait FromZeros: TryFromBytes {
     ///
     /// Returns an error on allocation failure. Allocation failure is
     /// guaranteed never to cause a panic or an abort.
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "new_box_zeroed_with_elems",
+        format = "coco",
+        arity = 2,
+        [
+            open
+            @index 1
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 2
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[must_use = "has no side effects (other than allocation)"]
     #[cfg(feature = "alloc")]
     #[cfg_attr(doc_cfg, doc(cfg(feature = "alloc")))]
@@ -3448,6 +3740,12 @@ pub unsafe trait FromZeros: TryFromBytes {
     ///
     /// Returns an error on allocation failure. Allocation failure is
     /// guaranteed never to cause a panic or an abort.
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "new_vec_zeroed",
+        format = "coco_static_size",
+    )]
     #[must_use = "has no side effects (other than allocation)"]
     #[cfg(feature = "alloc")]
     #[cfg_attr(doc_cfg, doc(cfg(feature = "alloc")))]
@@ -3461,6 +3759,12 @@ pub unsafe trait FromZeros: TryFromBytes {
 
     /// Extends a `Vec<Self>` by pushing `additional` new items onto the end of
     /// the vector. The new items are initialized with zeros.
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "extend_vec_zeroed",
+        format = "coco_static_size",
+    )]
     #[cfg(not(no_zerocopy_panic_in_const_and_vec_try_reserve_1_57_0))]
     #[cfg(feature = "alloc")]
     #[cfg_attr(doc_cfg, doc(cfg(all(rust = "1.57.0", feature = "alloc"))))]
@@ -3480,6 +3784,12 @@ pub unsafe trait FromZeros: TryFromBytes {
     /// # Panics
     ///
     /// Panics if `position > v.len()`.
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "insert_vec_zeroed",
+        format = "coco_static_size",
+    )]
     #[cfg(not(no_zerocopy_panic_in_const_and_vec_try_reserve_1_57_0))]
     #[cfg(feature = "alloc")]
     #[cfg_attr(doc_cfg, doc(cfg(all(rust = "1.57.0", feature = "alloc"))))]
@@ -3816,8 +4126,32 @@ pub unsafe trait FromBytes: FromZeros {
     /// assert_eq!(packet.header.checksum, [6, 7]);
     /// assert_eq!(packet.body, [8, 9, 10, 11]);
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "ref_from_bytes",
+        format = "coco",
+        arity = 3,
+        [
+            open
+            @index 1
+            @title "Sized"
+            @variant "static_size"
+        ],
+        [
+            @index 2
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 3
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn ref_from_bytes(source: &[u8]) -> Result<&Self, CastError<&[u8], Self>>
     where
         Self: KnownLayout + Immutable,
@@ -3904,8 +4238,32 @@ pub unsafe trait FromBytes: FromZeros {
     /// assert_eq!(packet.body, [[8, 9], [10, 11], [12, 13]]);
     /// assert_eq!(suffix, &[14u8][..]);
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "ref_from_prefix",
+        format = "coco",
+        arity = 3,
+        [
+            open
+            @index 1
+            @title "Sized"
+            @variant "static_size"
+        ],
+        [
+            @index 2
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 3
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn ref_from_prefix(source: &[u8]) -> Result<(&Self, &[u8]), CastError<&[u8], Self>>
     where
         Self: KnownLayout + Immutable,
@@ -3974,8 +4332,32 @@ pub unsafe trait FromBytes: FromZeros {
     /// assert_eq!(prefix, &[0, 1, 2, 3, 4, 5][..]);
     /// assert_eq!(trailer.frame_check_sequence, [6, 7, 8, 9]);
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "ref_from_suffix",
+        format = "coco",
+        arity = 3,
+        [
+            open
+            @index 1
+            @title "Sized"
+            @variant "static_size"
+        ],
+        [
+            @index 2
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 3
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn ref_from_suffix(source: &[u8]) -> Result<(&[u8], &Self), CastError<&[u8], Self>>
     where
         Self: Immutable + KnownLayout,
@@ -4051,9 +4433,15 @@ pub unsafe trait FromBytes: FromZeros {
     /// header.checksum = [0, 0];
     ///
     /// assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 0, 0]);
+    ///
     /// ```
+    ///
+    #[doc = codegen_header!("h5", "mut_from_bytes")]
+    ///
+    /// See [`FromBytes::ref_from_bytes`](#method.ref_from_bytes.codegen).
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn mut_from_bytes(source: &mut [u8]) -> Result<&mut Self, CastError<&mut [u8], Self>>
     where
         Self: IntoBytes + KnownLayout,
@@ -4138,8 +4526,13 @@ pub unsafe trait FromBytes: FromZeros {
     ///
     /// assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 0, 0, 1, 1]);
     /// ```
+    ///
+    #[doc = codegen_header!("h5", "mut_from_prefix")]
+    ///
+    /// See [`FromBytes::ref_from_prefix`](#method.ref_from_prefix.codegen).
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn mut_from_prefix(
         source: &mut [u8],
     ) -> Result<(&mut Self, &mut [u8]), CastError<&mut [u8], Self>>
@@ -4214,8 +4607,13 @@ pub unsafe trait FromBytes: FromZeros {
     ///
     /// assert_eq!(bytes, [0, 0, 0, 0, 0, 0, 1, 1, 1, 1]);
     /// ```
+    ///
+    #[doc = codegen_header!("h5", "mut_from_suffix")]
+    ///
+    /// See [`FromBytes::ref_from_suffix`](#method.ref_from_suffix.codegen).
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn mut_from_suffix(
         source: &mut [u8],
     ) -> Result<(&mut [u8], &mut Self), CastError<&mut [u8], Self>>
@@ -4287,8 +4685,27 @@ pub unsafe trait FromBytes: FromZeros {
     /// ```
     ///
     /// [`ref_from_bytes`]: FromBytes::ref_from_bytes
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "ref_from_bytes_with_elems",
+        format = "coco",
+        arity = 2,
+        [
+            open
+            @index 1
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 2
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn ref_from_bytes_with_elems(
         source: &[u8],
         count: usize,
@@ -4367,8 +4784,27 @@ pub unsafe trait FromBytes: FromZeros {
     /// ```
     ///
     /// [`ref_from_prefix`]: FromBytes::ref_from_prefix
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "ref_from_prefix_with_elems",
+        format = "coco",
+        arity = 2,
+        [
+            open
+            @index 1
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 2
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn ref_from_prefix_with_elems(
         source: &[u8],
         count: usize,
@@ -4442,8 +4878,27 @@ pub unsafe trait FromBytes: FromZeros {
     /// ```
     ///
     /// [`ref_from_suffix`]: FromBytes::ref_from_suffix
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "ref_from_suffix_with_elems",
+        format = "coco",
+        arity = 2,
+        [
+            open
+            @index 1
+            @title "Unsized"
+            @variant "dynamic_size"
+        ],
+        [
+            @index 2
+            @title "Dynamically Padded"
+            @variant "dynamic_padding"
+        ]
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn ref_from_suffix_with_elems(
         source: &[u8],
         count: usize,
@@ -4518,8 +4973,13 @@ pub unsafe trait FromBytes: FromZeros {
     /// ```
     ///
     /// [`mut_from_bytes`]: FromBytes::mut_from_bytes
+    ///
+    #[doc = codegen_header!("h5", "mut_from_bytes_with_elems")]
+    ///
+    /// See [`TryFromBytes::ref_from_bytes_with_elems`](#method.ref_from_bytes_with_elems.codegen).
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn mut_from_bytes_with_elems(
         source: &mut [u8],
         count: usize,
@@ -4603,8 +5063,13 @@ pub unsafe trait FromBytes: FromZeros {
     /// ```
     ///
     /// [`mut_from_prefix`]: FromBytes::mut_from_prefix
+    ///
+    #[doc = codegen_header!("h5", "mut_from_prefix_with_elems")]
+    ///
+    /// See [`TryFromBytes::ref_from_prefix_with_elems`](#method.ref_from_prefix_with_elems.codegen).
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn mut_from_prefix_with_elems(
         source: &mut [u8],
         count: usize,
@@ -4683,8 +5148,13 @@ pub unsafe trait FromBytes: FromZeros {
     /// ```
     ///
     /// [`mut_from_suffix`]: FromBytes::mut_from_suffix
+    ///
+    #[doc = codegen_header!("h5", "mut_from_suffix_with_elems")]
+    ///
+    /// See [`TryFromBytes::ref_from_suffix_with_elems`](#method.ref_from_suffix_with_elems.codegen).
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn mut_from_suffix_with_elems(
         source: &mut [u8],
         count: usize,
@@ -4724,8 +5194,15 @@ pub unsafe trait FromBytes: FromZeros {
     /// assert_eq!(header.length, [4, 5]);
     /// assert_eq!(header.checksum, [6, 7]);
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "read_from_bytes",
+        format = "coco_static_size",
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn read_from_bytes(source: &[u8]) -> Result<Self, SizeError<&[u8], Self>>
     where
         Self: Sized,
@@ -4775,8 +5252,15 @@ pub unsafe trait FromBytes: FromZeros {
     /// assert_eq!(header.checksum, [6, 7]);
     /// assert_eq!(body, [8, 9]);
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "read_from_prefix",
+        format = "coco_static_size",
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn read_from_prefix(source: &[u8]) -> Result<(Self, &[u8]), SizeError<&[u8], Self>>
     where
         Self: Sized,
@@ -4820,8 +5304,15 @@ pub unsafe trait FromBytes: FromZeros {
     /// assert_eq!(prefix, [0, 1, 2, 3, 4, 5]);
     /// assert_eq!(trailer.frame_check_sequence, [6, 7, 8, 9]);
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "read_from_suffix",
+        format = "coco_static_size",
+    )]
     #[must_use = "has no side effects"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     fn read_from_suffix(source: &[u8]) -> Result<(&[u8], Self), SizeError<&[u8], Self>>
     where
         Self: Sized,
@@ -5111,6 +5602,10 @@ fn mut_from_prefix_suffix<T: FromBytes + IntoBytes + KnownLayout + ?Sized>(
 ///       if its field is [`IntoBytes`]; else,
 ///     - if the type has no generic parameters, it is [`IntoBytes`] if the type
 ///       is sized and has no padding bytes; else,
+///     - if the type is `repr(C)` without an `align(N)` modifier for `N > 1`
+///       (it may have `align(1)` or `packed(N)`), and every field is `T`,
+///       `[T; N]`, or a final `[T]` for the same type parameter `T`, it is
+///       [`IntoBytes`]; else,
 ///     - if the type is `repr(C)`, its fields must be [`Unaligned`].
 /// - If the type is an enum:
 ///   - It must have a defined representation (`repr`s `C`, `u8`, `u16`, `u32`,
@@ -5232,6 +5727,24 @@ pub unsafe trait IntoBytes {
     ///
     /// assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "as_bytes",
+        format = "coco",
+        arity = 2,
+        [
+            open
+            @index 1
+            @title "Sized"
+            @variant "static_size"
+        ],
+        [
+            @index 2
+            @title "Unsized"
+            @variant "dynamic_size"
+        ]
+    )]
     #[must_use = "has no side effects"]
     #[inline(always)]
     fn as_bytes(&self) -> &[u8]
@@ -5304,6 +5817,10 @@ pub unsafe trait IntoBytes {
     ///     checksum: [1, 0],
     /// });
     /// ```
+    ///
+    #[doc = codegen_header!("h5", "as_mut_bytes")]
+    ///
+    /// See [`IntoBytes::as_bytes`](#method.as_bytes.codegen).
     #[must_use = "has no side effects"]
     #[inline(always)]
     fn as_mut_bytes(&mut self) -> &mut [u8]
@@ -5384,8 +5901,27 @@ pub unsafe trait IntoBytes {
     /// assert!(write_result.is_err());
     /// assert_eq!(excessive_bytes, [0u8; 128]);
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "write_to",
+        format = "coco",
+        arity = 2,
+        [
+            open
+            @index 1
+            @title "Sized"
+            @variant "static_size"
+        ],
+        [
+            @index 2
+            @title "Unsized"
+            @variant "dynamic_size"
+        ]
+    )]
     #[must_use = "callers should check the return value to see if the operation succeeded"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     #[allow(clippy::mut_from_ref)] // False positive: `&self -> &mut [u8]`
     fn write_to(&self, dst: &mut [u8]) -> Result<(), SizeError<&Self, &mut [u8]>>
     where
@@ -5451,8 +5987,27 @@ pub unsafe trait IntoBytes {
     /// assert!(write_result.is_err());
     /// assert_eq!(insufficient_bytes, [0, 0]);
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "write_to_prefix",
+        format = "coco",
+        arity = 2,
+        [
+            open
+            @index 1
+            @title "Sized"
+            @variant "static_size"
+        ],
+        [
+            @index 2
+            @title "Unsized"
+            @variant "dynamic_size"
+        ]
+    )]
     #[must_use = "callers should check the return value to see if the operation succeeded"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     #[allow(clippy::mut_from_ref)] // False positive: `&self -> &mut [u8]`
     fn write_to_prefix(&self, dst: &mut [u8]) -> Result<(), SizeError<&Self, &mut [u8]>>
     where
@@ -5527,8 +6082,27 @@ pub unsafe trait IntoBytes {
     /// assert!(write_result.is_err());
     /// assert_eq!(insufficient_bytes, [0, 0]);
     /// ```
+    ///
+    #[doc = codegen_section!(
+        header = "h5",
+        bench = "write_to_suffix",
+        format = "coco",
+        arity = 2,
+        [
+            open
+            @index 1
+            @title "Sized"
+            @variant "static_size"
+        ],
+        [
+            @index 2
+            @title "Unsized"
+            @variant "dynamic_size"
+        ]
+    )]
     #[must_use = "callers should check the return value to see if the operation succeeded"]
-    #[inline]
+    #[cfg_attr(zerocopy_inline_always, inline(always))]
+    #[cfg_attr(not(zerocopy_inline_always), inline)]
     #[allow(clippy::mut_from_ref)] // False positive: `&self -> &mut [u8]`
     fn write_to_suffix(&self, dst: &mut [u8]) -> Result<(), SizeError<&Self, &mut [u8]>>
     where

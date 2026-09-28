@@ -14,11 +14,7 @@
 use proc_macro::TokenStream;
 use syn::DeriveInput;
 
-mod dict;
-mod signature;
-mod r#type;
 mod utils;
-mod value;
 
 /// Derive macro to add [`Type`] implementation to structs and enums.
 ///
@@ -184,15 +180,19 @@ mod value;
 #[proc_macro_derive(Type, attributes(zbus, zvariant))]
 pub fn type_macro_derive(input: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(input).unwrap();
-    r#type::expand_derive(ast)
+    zvariant_utils::derive::expand_type_derive(ast, &utils::config())
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
 
-/// Adds [`Serialize`] implementation to structs to be serialized as `a{sv}` type.
+/// Adds [`Serialize`] implementation to structs to be serialized as a D-Bus dictionary type.
 ///
-/// This macro serializes the deriving struct as a D-Bus dictionary type, where keys are strings and
-/// values are generic values. Such dictionary types are very commonly used with
+/// The dictionary type is determined by the `signature` attribute. The default is `a{sv}`
+/// (string keys, variant values), but nested forms like `a{sa{sv}}` and `a{oa{sv}}` are also
+/// supported — fields whose value type is itself a dict (or any non-`Variant` type) are
+/// serialized directly through their own `Serialize` impl rather than wrapped as a variant.
+///
+/// Such dictionary types are very commonly used with
 /// [D-Bus](https://dbus.freedesktop.org/doc/dbus-specification.html#standard-interfaces-properties)
 /// and GVariant.
 ///
@@ -238,6 +238,30 @@ pub fn type_macro_derive(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
+/// ## Nested dictionaries
+///
+/// To represent shapes like `a{sa{sv}}` (the body type of
+/// `org.freedesktop.DBus.ObjectManager.GetManagedObjects` and similar APIs), nest one
+/// `SerializeDict`/`DeserializeDict` struct inside another:
+///
+/// ```
+/// use zvariant::{DeserializeDict, SerializeDict, Type};
+///
+/// #[derive(SerializeDict, DeserializeDict, Type, Default)]
+/// #[zvariant(signature = "a{sv}", rename_all = "PascalCase")]
+/// pub struct AdapterProperties {
+///     address: Option<String>,
+///     name: Option<String>,
+/// }
+///
+/// #[derive(SerializeDict, DeserializeDict, Type, Default)]
+/// #[zvariant(signature = "a{sa{sv}}")]
+/// pub struct InterfaceProperties {
+///     #[zvariant(rename = "org.bluez.Adapter1")]
+///     adapter: Option<AdapterProperties>,
+/// }
+/// ```
+///
 /// # Custom crate path
 ///
 /// If you've renamed `zvariant` in your `Cargo.toml` or are using it through a re-export,
@@ -258,15 +282,20 @@ pub fn type_macro_derive(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(SerializeDict, attributes(zbus, zvariant))]
 pub fn serialize_dict_macro_derive(input: TokenStream) -> TokenStream {
     let input: DeriveInput = syn::parse(input).unwrap();
-    dict::expand_serialize_derive(input)
+    zvariant_utils::derive::expand_serialize_dict_derive(input, &utils::config())
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
 
-/// Adds [`Deserialize`] implementation to structs to be deserialized from `a{sv}` type.
+/// Adds [`Deserialize`] implementation to structs to be deserialized from a D-Bus dictionary type.
 ///
-/// This macro deserializes a D-Bus dictionary type as a struct, where keys are strings and values
-/// are generic values. Such dictionary types are very commonly used with
+/// The dictionary type is determined by the `signature` attribute. The default is `a{sv}`
+/// (string keys, variant values), but nested forms like `a{sa{sv}}` and `a{oa{sv}}` are also
+/// supported — fields whose value type is itself a dict (or any non-`Variant` type) are
+/// deserialized directly through their own `Deserialize` impl rather than unwrapped from a
+/// variant. See [`SerializeDict`] for a nested example.
+///
+/// Such dictionary types are very commonly used with
 /// [D-Bus](https://dbus.freedesktop.org/doc/dbus-specification.html#standard-interfaces-properties)
 /// and GVariant.
 ///
@@ -332,7 +361,7 @@ pub fn serialize_dict_macro_derive(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(DeserializeDict, attributes(zbus, zvariant))]
 pub fn deserialize_dict_macro_derive(input: TokenStream) -> TokenStream {
     let input: DeriveInput = syn::parse(input).unwrap();
-    dict::expand_deserialize_derive(input)
+    zvariant_utils::derive::expand_deserialize_dict_derive(input, &utils::config())
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
@@ -531,9 +560,13 @@ pub fn deserialize_dict_macro_derive(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Value, attributes(zbus, zvariant))]
 pub fn value_macro_derive(input: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(input).unwrap();
-    value::expand_derive(ast, value::ValueType::Value)
-        .unwrap_or_else(|err| err.to_compile_error())
-        .into()
+    zvariant_utils::derive::expand_value_derive(
+        ast,
+        zvariant_utils::derive::ValueType::Value,
+        &utils::config(),
+    )
+    .unwrap_or_else(|err| err.to_compile_error())
+    .into()
 }
 
 /// Implements conversions for your type to/from [`OwnedValue`].
@@ -546,9 +579,13 @@ pub fn value_macro_derive(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(OwnedValue, attributes(zbus, zvariant))]
 pub fn owned_value_macro_derive(input: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(input).unwrap();
-    value::expand_derive(ast, value::ValueType::OwnedValue)
-        .unwrap_or_else(|err| err.to_compile_error())
-        .into()
+    zvariant_utils::derive::expand_value_derive(
+        ast,
+        zvariant_utils::derive::ValueType::OwnedValue,
+        &utils::config(),
+    )
+    .unwrap_or_else(|err| err.to_compile_error())
+    .into()
 }
 
 /// Constructs a const [`Signature`] with compile-time validation.
@@ -630,7 +667,9 @@ pub fn owned_value_macro_derive(input: TokenStream) -> TokenStream {
 /// [`Signature`]: https://docs.rs/zvariant/latest/zvariant/enum.Signature.html
 #[proc_macro]
 pub fn signature(input: TokenStream) -> TokenStream {
-    signature::expand_signature_macro(input.into())
+    // The `signature!` macro has always emitted hardcoded `::zvariant` paths (it never used
+    // proc-macro-crate detection); keep that behaviour.
+    zvariant_utils::derive::expand_signature_macro(input.into(), &quote::quote! { ::zvariant })
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }

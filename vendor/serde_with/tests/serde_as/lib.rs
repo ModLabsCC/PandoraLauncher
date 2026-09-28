@@ -32,10 +32,10 @@ use serde::{Deserialize, Serialize};
 use serde_with::{
     formats::{CommaSeparator, Flexible, Strict},
     serde_as, BoolFromInt, BytesOrString, DisplayFromStr, IfIsHumanReadable, Map,
-    NoneAsEmptyString, OneOrMany, Same, Seq, StringWithSeparator,
+    NoneAsEmptyString, NoneAsZero, OneOrMany, Same, Seq, StringWithSeparator,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Mutex, RwLock},
 };
 
@@ -1323,6 +1323,122 @@ fn test_one_or_many_prefer_many() {
     );
 }
 
+#[test]
+fn test_one_or_many_hashset_prefer_one() {
+    #[serde_as]
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct S1(#[serde_as(as = "OneOrMany<_>")] HashSet<u32>);
+
+    is_equal(S1(HashSet::new()), expect![[r#"[]"#]]);
+    is_equal(S1(HashSet::from([1])), expect![[r#"1"#]]);
+    check_deserialization(S1(HashSet::from([1])), r#"1"#);
+    check_deserialization(S1(HashSet::from([1])), r#"[1]"#);
+    check_deserialization(S1(HashSet::from([1, 2, 3])), r#"[1, 2, 3]"#);
+    check_deserialization(S1(HashSet::from([1, 2, 3])), r#"[3, 2, 1]"#);
+    check_error_deserialization::<S1>(
+        r#""xx""#,
+        expect![[r#"
+        OneOrMany could not deserialize any variant:
+          One: invalid type: string "xx", expected u32
+          Many: invalid type: string "xx", expected a sequence"#]],
+    );
+
+    #[serde_as]
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct S2(#[serde_as(as = "OneOrMany<DisplayFromStr>")] HashSet<u32>);
+
+    is_equal(S2(HashSet::from([1])), expect![[r#""1""#]]);
+    check_deserialization(S2(HashSet::from([1])), r#""1""#);
+    check_deserialization(S2(HashSet::from([1])), r#"["1"]"#);
+    check_deserialization(S2(HashSet::from([1, 2, 3])), r#"["1", "2", "3"]"#);
+    check_error_deserialization::<S2>(
+        r#"{}"#,
+        expect![[r#"
+        OneOrMany could not deserialize any variant:
+          One: invalid type: map, expected a string
+          Many: invalid type: map, expected a sequence"#]],
+    );
+}
+
+#[test]
+fn test_one_or_many_hashset_prefer_many() {
+    use serde_with::formats::PreferMany;
+
+    #[serde_as]
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct S1(#[serde_as(as = "OneOrMany<_, PreferMany>")] HashSet<u32>);
+
+    is_equal(S1(HashSet::new()), expect![[r#"[]"#]]);
+    is_equal(
+        S1(HashSet::from([1])),
+        expect![[r#"
+            [
+              1
+            ]"#]],
+    );
+    check_deserialization(S1(HashSet::from([1])), r#"1"#);
+    check_deserialization(S1(HashSet::from([1])), r#"[1]"#);
+    check_deserialization(S1(HashSet::from([1, 2, 3])), r#"[1, 2, 3]"#);
+}
+
+#[test]
+fn test_one_or_many_btreeset_prefer_one() {
+    #[serde_as]
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct S1(#[serde_as(as = "OneOrMany<_>")] BTreeSet<u32>);
+
+    is_equal(S1(BTreeSet::new()), expect![[r#"[]"#]]);
+    is_equal(S1(BTreeSet::from([1])), expect![[r#"1"#]]);
+    check_deserialization(S1(BTreeSet::from([1])), r#"1"#);
+    check_deserialization(S1(BTreeSet::from([1])), r#"[1]"#);
+    check_deserialization(S1(BTreeSet::from([1, 2, 3])), r#"[1, 2, 3]"#);
+    check_deserialization(S1(BTreeSet::from([1, 2, 3])), r#"[3, 2, 1]"#);
+    check_error_deserialization::<S1>(
+        r#""xx""#,
+        expect![[r#"
+        OneOrMany could not deserialize any variant:
+          One: invalid type: string "xx", expected u32
+          Many: invalid type: string "xx", expected a sequence"#]],
+    );
+
+    #[serde_as]
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct S2(#[serde_as(as = "OneOrMany<DisplayFromStr>")] BTreeSet<u32>);
+
+    is_equal(S2(BTreeSet::from([1])), expect![[r#""1""#]]);
+    check_deserialization(S2(BTreeSet::from([1])), r#""1""#);
+    check_deserialization(S2(BTreeSet::from([1])), r#"["1"]"#);
+    check_deserialization(S2(BTreeSet::from([1, 2, 3])), r#"["1", "2", "3"]"#);
+    check_error_deserialization::<S2>(
+        r#"{}"#,
+        expect![[r#"
+        OneOrMany could not deserialize any variant:
+          One: invalid type: map, expected a string
+          Many: invalid type: map, expected a sequence"#]],
+    );
+}
+
+#[test]
+fn test_one_or_many_btreeset_prefer_many() {
+    use serde_with::formats::PreferMany;
+
+    #[serde_as]
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct S1(#[serde_as(as = "OneOrMany<_, PreferMany>")] BTreeSet<u32>);
+
+    is_equal(S1(BTreeSet::new()), expect![[r#"[]"#]]);
+    is_equal(
+        S1(BTreeSet::from([1])),
+        expect![[r#"
+            [
+              1
+            ]"#]],
+    );
+    check_deserialization(S1(BTreeSet::from([1])), r#"1"#);
+    check_deserialization(S1(BTreeSet::from([1])), r#"[1]"#);
+    check_deserialization(S1(BTreeSet::from([1, 2, 3])), r#"[1, 2, 3]"#);
+}
+
 /// Test that Cow borrows from the input
 #[test]
 fn test_borrow_cow_str() {
@@ -1525,4 +1641,49 @@ fn test_boolfromint() {
         r#""""#,
         expect![[r#"invalid type: string "", expected an integer at line 1 column 2"#]],
     );
+}
+
+#[test]
+fn test_none_as_zero() {
+    use core::num::{NonZeroI16, NonZeroI64, NonZeroU32, NonZeroU8, NonZeroUsize};
+
+    #[serde_as]
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct SU8(#[serde_as(as = "NoneAsZero")] Option<NonZeroU8>);
+
+    is_equal(SU8(None), expect![[r#"0"#]]);
+    is_equal(SU8(NonZeroU8::new(1)), expect![[r#"1"#]]);
+    is_equal(SU8(NonZeroU8::new(255)), expect![[r#"255"#]]);
+
+    #[serde_as]
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct SU32(#[serde_as(as = "NoneAsZero")] Option<NonZeroU32>);
+
+    is_equal(SU32(None), expect![[r#"0"#]]);
+    is_equal(SU32(NonZeroU32::new(42)), expect![[r#"42"#]]);
+
+    #[serde_as]
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct SI16(#[serde_as(as = "NoneAsZero")] Option<NonZeroI16>);
+
+    is_equal(SI16(None), expect![[r#"0"#]]);
+    is_equal(SI16(NonZeroI16::new(-7)), expect![[r#"-7"#]]);
+    is_equal(SI16(NonZeroI16::new(7)), expect![[r#"7"#]]);
+
+    #[serde_as]
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct SI64(#[serde_as(as = "NoneAsZero")] Option<NonZeroI64>);
+
+    is_equal(SI64(None), expect![[r#"0"#]]);
+    is_equal(
+        SI64(NonZeroI64::new(-9_000_000_000)),
+        expect![[r#"-9000000000"#]],
+    );
+
+    #[serde_as]
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct SUsize(#[serde_as(as = "NoneAsZero")] Option<NonZeroUsize>);
+
+    is_equal(SUsize(None), expect![[r#"0"#]]);
+    is_equal(SUsize(NonZeroUsize::new(3)), expect![[r#"3"#]]);
 }

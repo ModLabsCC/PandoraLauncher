@@ -1,11 +1,11 @@
 use std::{path::{Path, PathBuf}, sync::Arc};
 
-use bridge::{import::ImportFromOtherLauncherJob, modal_action::{ModalAction, ProgressTracker}};
+use bridge::{import::ImportFromOtherLauncherJob, modal_action::ModalAction};
 use schema::{curseforge::{CurseforgeModLoaderType}, instance::{InstanceConfiguration, InstanceMemoryConfiguration}, loader::Loader};
 use serde::Deserialize;
 use ustr::Ustr;
 
-use crate::{BackendState, write_safe};
+use crate::BackendState;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,6 +77,7 @@ fn try_load_from_curseforge(config_path: &Path) -> Option<InstanceConfiguration>
 
 pub fn import_from_curseforge(backend: &BackendState, import_job: ImportFromOtherLauncherJob, modal_action: ModalAction) {
     import_instances_from_curseforge(backend, &import_job, &modal_action);
+    modal_action.set_finished();
 }
 
 #[derive(Debug)]
@@ -91,9 +92,7 @@ pub fn import_instances_from_curseforge(backend: &BackendState, import_job: &Imp
         return;
     }
 
-    let all_tracker = ProgressTracker::new("Importing instances".into(), backend.send.clone());
-    modal_action.trackers.push(all_tracker.clone());
-    all_tracker.notify();
+    let all_tracker = modal_action.push_tracker("Importing instances".into());
 
     let mut to_import = Vec::new();
 
@@ -127,20 +126,16 @@ pub fn import_instances_from_curseforge(backend: &BackendState, import_job: &Imp
 
     for to_import in to_import {
         let title = format!("Importing {}", to_import.folder.file_name().unwrap().to_string_lossy());
-        let tracker = ProgressTracker::new(title.into(), backend.send.clone());
-        modal_action.trackers.push(tracker.clone());
-        tracker.notify();
+        let tracker = modal_action.push_tracker(title.into());
 
         let Some(configuration) = try_load_from_curseforge(&to_import.config_path) else {
             tracker.set_finished(bridge::modal_action::ProgressTrackerFinishType::Error);
             log::error!("Failed to load config path from curseforge for {:?}", to_import.folder.file_name().unwrap());
-            tracker.notify();
             continue;
         };
 
         let Ok(configuration_bytes) = serde_json::to_vec(&configuration) else {
             tracker.set_finished(bridge::modal_action::ProgressTrackerFinishType::Error);
-            tracker.notify();
             continue;
         };
 
@@ -148,10 +143,9 @@ pub fn import_instances_from_curseforge(backend: &BackendState, import_job: &Imp
         let target_dot_minecraft = to_import.pandora_path.join(".minecraft");
 
         _ = std::fs::create_dir_all(&target_dot_minecraft);
-        _ = crate::copy_content_recursive(&to_import.folder, &target_dot_minecraft, false, &|copied, total| {
+        _ = crate::fs::copy_content_recursive(&to_import.folder, &target_dot_minecraft, false, &|copied, total| {
             tracker.set_total(total as usize);
             tracker.set_count(copied as usize);
-            tracker.notify();
         });
 
         // remove old configuration, rename icon path.
@@ -164,13 +158,13 @@ pub fn import_instances_from_curseforge(backend: &BackendState, import_job: &Imp
         _ = std::fs::remove_file(&target_dot_minecraft.join("minecraftinstance.json"));
 
         let info_path = to_import.pandora_path.join("info_v1.json");
-        _ = write_safe(&info_path, &configuration_bytes);
+        _ = crate::fs::write_safe(&info_path, &configuration_bytes);
 
         all_tracker.add_count(1);
-        all_tracker.notify();
 
         tracker.set_finished(bridge::modal_action::ProgressTrackerFinishType::Fast);
-        tracker.notify();
     }
+
+    all_tracker.set_finished(bridge::modal_action::ProgressTrackerFinishType::Normal);
 
 }

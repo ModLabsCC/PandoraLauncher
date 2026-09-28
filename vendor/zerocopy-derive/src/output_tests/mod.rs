@@ -66,11 +66,11 @@ macro_rules! test {
         }
     };
 
-    ($name:ident { $($i:tt)* } expands to $path:literal) => {
-        test!($name { $($i)* } expands to $path no_build);
+    ($name:ident { $($i:tt)* } expands to $path:expr) => {
+        test!($name { $($i)* } expands to $path; no_build);
     };
 
-    ($name:ident { $($i:tt)* } expands to $path:literal no_build) => {
+    ($name:ident { $($i:tt)* } expands to $path:expr; no_build) => {
         {
             let ts: proc_macro2::TokenStream = quote::quote!( $($i)* );
             let ast = syn::parse2::<syn::DeriveInput>(ts).unwrap();
@@ -246,6 +246,16 @@ fn test_into_bytes_struct_trailing_generic() {
 }
 
 #[test]
+fn test_into_bytes_struct_homogeneous_generic() {
+    test! {
+        IntoBytes {
+            #[repr(C)]
+            struct Foo<T, const N: usize>(T, [T; N], [T]);
+        } expands to "expected/into_bytes_struct_homogeneous_generic.expected.rs"
+    }
+}
+
+#[test]
 fn test_into_bytes_enum() {
     macro_rules! test_repr {
         ($(#[$attr:meta])*) => {
@@ -255,7 +265,7 @@ fn test_into_bytes_enum() {
                     enum Foo {
                         Bar,
                     }
-                } expands to "expected/into_bytes_enum.expected.rs"
+                } expands to concat!("expected/into_bytes_enum.", stringify!($attr), ".expected.rs")
             })*
         };
     }

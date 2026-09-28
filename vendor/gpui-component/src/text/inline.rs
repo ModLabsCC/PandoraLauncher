@@ -1,3 +1,4 @@
+use gpui::Corners;
 use std::{
     ops::Range,
     rc::Rc,
@@ -5,13 +6,22 @@ use std::{
 };
 
 use gpui::{
-    App, BorderStyle, Bounds, CursorStyle, Edges, Element, ElementId, GlobalElementId, Half,
-    HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, StyledText, TextLayout, Window,
-    point, px, quad,
+    App, BorderStyle, Bounds, ClickEvent, CursorStyle, Edges, Element, ElementId, GlobalElementId,
+    Half, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
+    MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    SharedString, StyledText, TextLayout, Window, point, px, quad,
 };
 
-use crate::{ActiveTheme, global_state::GlobalState, input::Selection, text::node::LinkMark};
+use crate::{
+    ActiveTheme,
+    global_state::UiGlobalState,
+    input::Selection,
+    text::TextViewMultiClickKind,
+    text::node::LinkMark,
+    text::selection::word_range_at,
+    text::state::LineSpan,
+    text::text_view::{LinkClickHandlerFn, handle_link_click},
+};
 
 /// A inline element used to render a inline text and support selectable.
 ///
@@ -22,6 +32,7 @@ pub(super) struct Inline {
     links: Rc<Vec<(Range<usize>, LinkMark)>>,
     highlights: Vec<(Range<usize>, HighlightStyle)>,
     styled_text: StyledText,
+    link_click_handler: Option<Arc<LinkClickHandlerFn>>,
 
     state: Arc<Mutex<InlineState>>,
 }
@@ -48,14 +59,20 @@ impl Inline {
         state: Arc<Mutex<InlineState>>,
         links: Vec<(Range<usize>, LinkMark)>,
         highlights: Vec<(Range<usize>, HighlightStyle)>,
+        link_click_handler: Option<Arc<LinkClickHandlerFn>>,
     ) -> Self {
-        let text = state.lock().unwrap().text.clone();
+        let text = state
+            .lock()
+            .map(|state| state.text.clone())
+            .unwrap_or_default();
+
         Self {
             id: id.into(),
             links: Rc::new(links),
             highlights,
             text: text.clone(),
             styled_text: StyledText::new(text),
+            link_click_handler,
             state,
         }
     }
@@ -82,7 +99,7 @@ impl Inline {
         window.paint_quad(gpui::PaintQuad {
             bounds,
             background: cx.theme().blue.alpha(0.01).into(),
-            corner_radii: gpui::Corners::default(),
+            corner_radii: Corners::default(),
             border_color: gpui::transparent_black(),
             border_style: BorderStyle::default(),
             border_widths: gpui::Edges::all(px(0.)),
@@ -92,20 +109,40 @@ impl Inline {
     fn layout_selections(
         &self,
         text_layout: &TextLayout,
+        bounds: &Bounds<Pixels>,
         window: &mut Window,
         cx: &mut App,
     ) -> (bool, bool, Option<Selection>) {
-        let Some(text_view_state) = GlobalState::global(cx).text_view_state() else {
+        let Some(text_view_state) = UiGlobalState::global(cx).text_view_state() else {
             return (false, false, None);
         };
 
         let text_view_state = text_view_state.read(cx);
         let is_selectable = text_view_state.is_selectable();
-        if !text_view_state.has_selection() {
-            return (is_selectable, false, None);
+        if !is_selectable {
+            return (false, false, None);
         }
 
-        let Some((selection_start, selection_end)) = text_view_state.selection_points() else {
+        if text_view_state.is_all_selected() {
+            return (is_selectable, true, Some((0..self.text.len()).into()));
+        }
+
+        if let Some(selection) = text_view_state.multi_click_selection() {
+            return (
+                is_selectable,
+                true,
+                selection_for_multi_click(
+                    &self.text,
+                    text_layout,
+                    *bounds,
+                    selection.pos,
+                    selection.kind,
+                )
+                .map(Selection::from),
+            );
+        }
+
+        let Some((selection_start, selection_end)) = text_view_state.selection_points(cx) else {
             return (is_selectable, false, None);
         };
         let line_height = window.line_height();
@@ -113,6 +150,25 @@ impl Inline {
         // Use for debug selection bounds
         // self.paint_selected_bounds(Bounds::from_corners(selection_start, selection_end), window, cx);
 
+        // NOTE: the selection is computed purely from the geometric band
+        // (`selection_start`..`selection_end`), NOT from what is currently
+        // visible. Every glyph of a *painted* element is laid out (its
+        // `position_for_index` is valid) even when it is scrolled out of, or
+        // clipped by, an ancestor's viewport — the content mask only clips the
+        // painted pixels. Because the copied text is derived from
+        // `InlineState.selection`, gating the selection on `content_mask` here
+        // used to drop scrolled-out-but-selected glyphs, so a selection taller
+        // than the viewport (e.g. a long chat message, or a drag with
+        // auto-scroll) copied only the portion that happened to be on screen.
+        //
+        // This does not resurrect the #2156 clipped-hit-testing behavior: a
+        // selection can only START on visible text (window selection resolves
+        // endpoints with hitbox hover testing against visible Inline bounds),
+        // so the band's endpoints are always anchored to on-screen text.
+        // Content that is merely `overflow_hidden`
+        // (not scrolled) lies outside that band and is still excluded, while
+        // the highlight quads painted for off-screen glyphs are clipped away by
+        // GPUI's content mask as before.
         let mut selection: Option<Selection> = None;
         let mut offset = 0;
         let mut chars = self.text.chars().peekable();
@@ -122,8 +178,9 @@ impl Inline {
                 continue;
             };
 
+            let next_offset = offset + c.len_utf8();
             let mut char_width = line_height.half();
-            if let Some(next_pos) = text_layout.position_for_index(offset + 1) {
+            if let Some(next_pos) = text_layout.position_for_index(next_offset) {
                 if next_pos.y == pos.y {
                     char_width = next_pos.x - pos.x;
                 }
@@ -135,14 +192,66 @@ impl Inline {
                     selection = Some((offset..offset).into());
                 }
 
-                let next_offset = offset + c.len_utf8();
-                selection.as_mut().unwrap().end = next_offset;
+                if let Some(selection) = selection.as_mut() {
+                    selection.end = next_offset;
+                }
             }
 
-            offset += c.len_utf8();
+            offset = next_offset;
         }
 
         (true, true, selection)
+    }
+
+    fn text_line_bounds(
+        &self,
+        text_layout: &TextLayout,
+        line_height: Pixels,
+        mask_bounds: Bounds<Pixels>,
+    ) -> Vec<Bounds<Pixels>> {
+        let mut line_bounds = Vec::new();
+        let mut current_line_y = None;
+        let mut current_bounds: Option<Bounds<Pixels>> = None;
+        let mut offset = 0;
+
+        for c in self.text.chars() {
+            let next_offset = offset + c.len_utf8();
+            let Some(pos) = text_layout.position_for_index(offset) else {
+                offset = next_offset;
+                continue;
+            };
+
+            let mut char_width = line_height.half();
+            if let Some(next_pos) = text_layout.position_for_index(next_offset) {
+                if next_pos.y == pos.y {
+                    char_width = next_pos.x - pos.x;
+                }
+            }
+
+            let bounds = Bounds::from_corners(pos, point(pos.x + char_width, pos.y + line_height))
+                .intersect(&mask_bounds);
+            if bounds.size.width > px(0.) && bounds.size.height > px(0.) {
+                if current_line_y == Some(pos.y) {
+                    if let Some(current) = current_bounds.as_mut() {
+                        *current = current.union(&bounds);
+                    }
+                } else {
+                    if let Some(current) = current_bounds.take() {
+                        line_bounds.push(current);
+                    }
+                    current_line_y = Some(pos.y);
+                    current_bounds = Some(bounds);
+                }
+            }
+
+            offset = next_offset;
+        }
+
+        if let Some(current) = current_bounds {
+            line_bounds.push(current);
+        }
+
+        line_bounds
     }
 
     /// Paint the selection background.
@@ -282,6 +391,23 @@ impl Element for Inline {
         self.styled_text
             .prepaint(id, inspector_id, bounds, &mut (), window, cx);
 
+        // Report this element's laid-out extent so an ancestor TextView with
+        // `max_lines` can snap its clip to a whole-line boundary. The state
+        // stack only holds an entry during prepaint when that view set
+        // `max_lines`, so this is a no-op otherwise.
+        if let Some(text_view_state) = UiGlobalState::global(cx).text_view_state().cloned() {
+            let state = text_view_state.read(cx);
+            if state.max_lines.is_some()
+                && let Ok(mut line_spans) = state.line_spans.lock()
+            {
+                line_spans.push(LineSpan {
+                    top: bounds.top(),
+                    bottom: bounds.bottom(),
+                    line_height: window.line_height(),
+                });
+            }
+        }
+
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
         hitbox
     }
@@ -298,7 +424,9 @@ impl Element for Inline {
     ) {
         let current_view = window.current_view();
         let hitbox = prepaint;
-        let mut state = self.state.lock().unwrap();
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
 
         let text_layout = self.styled_text.layout().clone();
         self.styled_text
@@ -306,7 +434,7 @@ impl Element for Inline {
 
         // layout selections
         let (is_selectable, is_selection, selection) =
-            self.layout_selections(&text_layout, window, cx);
+            self.layout_selections(&text_layout, &bounds, window, cx);
 
         state.selection = selection;
 
@@ -322,6 +450,72 @@ impl Element for Inline {
 
         if let Some(selection) = &state.selection {
             Self::paint_selection(selection, &text_layout, &bounds, window, cx);
+        }
+
+        if is_selectable {
+            if let Some(text_view_state) = UiGlobalState::global(cx).text_view_state().cloned() {
+                let text_bounds = self.text_line_bounds(
+                    &text_layout,
+                    text_layout.line_height(),
+                    window.content_mask().bounds,
+                );
+                text_view_state.update(cx, |state, _| {
+                    state.selection_adapter.register_inline(text_bounds);
+                });
+            }
+
+            window.on_mouse_event({
+                let hitbox = hitbox.clone();
+                let text_layout = text_layout.clone();
+                let inline_state = self.state.clone();
+                let text = self.text.clone();
+                let text_view_state = UiGlobalState::global(cx).text_view_state().cloned();
+                move |event: &MouseDownEvent, phase, window, cx| {
+                    if !phase.bubble()
+                        || !hitbox.is_hovered(window)
+                        || event.button != MouseButton::Left
+                    {
+                        return;
+                    }
+
+                    let kind = match event.click_count {
+                        2 => TextViewMultiClickKind::Word,
+                        3 => TextViewMultiClickKind::Paragraph,
+                        _ => return,
+                    };
+
+                    let Some(range) = selection_for_multi_click(
+                        &text,
+                        &text_layout,
+                        hitbox.bounds,
+                        event.position,
+                        kind,
+                    ) else {
+                        return;
+                    };
+
+                    let selected_text = text[range.clone()].to_string();
+
+                    // This renderer owns multi-click selection. Prevent the
+                    // window selection layer from handling the same press.
+                    gpui_base::GlobalState::suppress_text_selection(cx);
+
+                    if let Ok(mut inline_state) = inline_state.lock() {
+                        inline_state.selection = Some(range.into());
+                    }
+                    if let Some(text_view_state) = &text_view_state {
+                        text_view_state.update(cx, |state, cx| {
+                            state.set_multi_click_selection(
+                                event.position,
+                                kind,
+                                selected_text,
+                                cx,
+                            );
+                        });
+                    }
+                    cx.notify(current_view);
+                }
+            });
         }
 
         // mouse move, update hovered link
@@ -350,21 +544,62 @@ impl Element for Inline {
                 let links = self.links.clone();
                 let text_layout = text_layout.clone();
                 let hitbox = hitbox.clone();
+                let text_view_state = UiGlobalState::global(cx).text_view_state().cloned();
+                let link_click_handler = self.link_click_handler.clone();
 
                 move |event: &MouseUpEvent, phase, window, cx| {
                     if !phase.bubble() || !hitbox.is_hovered(window) {
+                        return;
+                    }
+                    if text_view_state
+                        .as_ref()
+                        .is_some_and(|state| state.read(cx).has_selection(cx))
+                    {
                         return;
                     }
 
                     if let Some(link) =
                         Self::link_for_position(&text_layout, &links, event.position)
                     {
+                        gpui_base::TextSelection::end(window, cx);
                         cx.stop_propagation();
-                        cx.open_url(&link.url);
+                        let click = ClickEvent::Mouse(MouseClickEvent {
+                            down: MouseDownEvent {
+                                button: event.button,
+                                position: event.position,
+                                modifiers: event.modifiers,
+                                click_count: event.click_count,
+                                first_mouse: false,
+                            },
+                            up: event.clone(),
+                        });
+                        handle_link_click(&link_click_handler, link.url, click, window, cx);
                     }
                 }
             });
         }
+    }
+}
+
+fn selection_for_multi_click(
+    text: &str,
+    text_layout: &TextLayout,
+    bounds: Bounds<Pixels>,
+    pos: Point<Pixels>,
+    kind: TextViewMultiClickKind,
+) -> Option<std::ops::Range<usize>> {
+    if !bounds.contains(&pos) {
+        return None;
+    }
+
+    let offset = text_layout.index_for_position(pos).ok()?;
+
+    match kind {
+        TextViewMultiClickKind::Word => word_range_at(text, offset),
+        // Known limitation: a paragraph maps to a single Inline run here. When a
+        // paragraph embeds an inline image it is split into multiple Inline runs,
+        // so triple-click only selects the run on the clicked side of the image.
+        TextViewMultiClickKind::Paragraph => (!text.is_empty()).then_some(0..text.len()),
     }
 }
 

@@ -1,5 +1,3 @@
-use std::f32;
-
 use gpui::{
     Bounds, Context, Edges, Empty, EntityId, IntoElement, ParentElement as _, Pixels, Render,
     SharedString, Styled as _, TextAlign, Window, div, prelude::FluentBuilder, px,
@@ -277,7 +275,7 @@ impl Render for DragColumn {
         div()
             .px_4()
             .py_1()
-            .bg(cx.theme().table_head)
+            .bg(cx.theme().tokens.table_head)
             .text_color(cx.theme().muted_foreground)
             .opacity(0.9)
             .border_1()

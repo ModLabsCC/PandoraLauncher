@@ -54,6 +54,7 @@ use crate::escape::{
 };
 use crate::name::{LocalName, QName};
 use crate::utils::{self, name_len, trim_xml_end, trim_xml_start, write_cow_string};
+use crate::XmlVersion;
 use attributes::{AttrError, Attribute, Attributes};
 
 /// Opening tag data (`Event::Start`), with optional attributes: `<name attr="value">`.
@@ -489,12 +490,12 @@ impl<'a> arbitrary::Arbitrary<'a> for BytesEnd<'a> {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// Data from various events (most notably, `Event::Text`) that stored in XML
-/// in escaped form. Internally data is stored in escaped form.
+/// Data from various events (most notably, `Event::Text`).
 ///
 /// This event implements `Deref<Target = [u8]>`. The `deref()` implementation
 /// returns the content of this event. In case of comment this is everything
-/// between `<!--` and `-->` and the text of comment will not contain `-->` inside.
+/// between `<!--` and `-->` and the text of comment may not contain `-->` inside
+/// (if [`Config::check_comments`] is set to `true`).
 /// In case of DTD this is everything between `<!DOCTYPE` + spaces and closing `>`
 /// (i.e. in case of DTD the first character is never space):
 ///
@@ -520,6 +521,8 @@ impl<'a> arbitrary::Arbitrary<'a> for BytesEnd<'a> {
 /// // AsRef<[u8]> for &T + deref coercion
 /// assert_eq!(event.as_ref(), content.as_bytes());
 /// ```
+///
+/// [`Config::check_comments`]: crate::reader::Config::check_comments
 #[derive(Clone, Eq, PartialEq)]
 pub struct BytesText<'a> {
     /// Escaped then encoded content of the event. Content is encoded in the XML
@@ -531,7 +534,8 @@ pub struct BytesText<'a> {
 }
 
 impl<'a> BytesText<'a> {
-    /// Creates a new `BytesText` from an escaped byte sequence in the specified encoding.
+    /// Creates a new `BytesText` from a raw byte sequence as it appeared in th XML
+    /// source in the specified encoding.
     #[inline]
     pub(crate) fn wrap<C: Into<Cow<'a, [u8]>>>(content: C, decoder: Decoder) -> Self {
         Self {
@@ -540,14 +544,38 @@ impl<'a> BytesText<'a> {
         }
     }
 
-    /// Creates a new `BytesText` from an escaped string.
+    /// Creates a new `BytesText` from a raw string as it appeared in the XML source.
+    ///
+    /// # Warning
+    ///
+    /// `content` is not checked to not contain markup or entity references. Be warned
+    /// that writing such event may result to invalid XML if your content contains not
+    /// defined entity references or invalid XML markup.
+    ///
+    /// `content` may have any EOLs, they will be normalized when using [`xml_content()`] getters.
+    ///
+    /// [`xml_content()`]: Self::xml_content
     #[inline]
     pub fn from_escaped<C: Into<Cow<'a, str>>>(content: C) -> Self {
         Self::wrap(str_cow_to_bytes(content), Decoder::utf8())
     }
 
-    /// Creates a new `BytesText` from a string. The string is expected not to
-    /// be escaped.
+    /// Creates a new `BytesText` from a string.
+    ///
+    /// # Warning
+    ///
+    /// `content` will be escaped using the [`escape`] function, but that may change
+    /// in the future, because events produced by the reader never contains `&` or `<`,
+    /// and escaping of `>`, `"` and `'` is not required. If you want to preserve exact
+    /// content, use [`from_escaped()`] method, but be warned that writing such event
+    /// may result to invalid XML if your content contains not defined entity references
+    /// or invalid XML markup.
+    ///
+    /// `content` may have any EOLs, they will be normalized when using [`xml_content()`] getters.
+    ///
+    /// [`escape`]: crate::escape::escape
+    /// [`from_escaped()`]: Self::from_escaped
+    /// [`xml_content()`]: Self::xml_content
     #[inline]
     pub fn new(content: &'a str) -> Self {
         Self::from_escaped(escape(content))
@@ -580,8 +608,7 @@ impl<'a> BytesText<'a> {
 
     /// Decodes the content of the event.
     ///
-    /// This will allocate if the value contains any escape sequences or in
-    /// non-UTF-8 encoding.
+    /// This will allocate if the value is encoded in non-UTF-8 encoding.
     ///
     /// This method does not normalizes end-of-line characters as required by [specification].
     /// Usually you need [`xml_content()`](Self::xml_content) instead of this method.
@@ -597,8 +624,7 @@ impl<'a> BytesText<'a> {
     /// associated with that reader to interpret the raw bytes contained within
     /// this text event.
     ///
-    /// This will allocate if the value contains any escape sequences or in non-UTF-8
-    /// encoding, or EOL normalization is required.
+    /// This will allocate if the value is encoded in non-UTF-8 encoding, or EOL normalization is required.
     ///
     /// Note, that this method should be used only if event represents XML 1.0 or HTML content,
     /// because rules for normalizing EOLs for [XML 1.0] / [HTML] and [XML 1.1] differs.
@@ -618,8 +644,7 @@ impl<'a> BytesText<'a> {
     /// associated with that reader to interpret the raw bytes contained within
     /// this text event.
     ///
-    /// This will allocate if the value contains any escape sequences or in non-UTF-8
-    /// encoding, or EOL normalization is required.
+    /// This will allocate if the value is encoded in non-UTF-8 encoding, or EOL normalization is required.
     ///
     /// Note, that this method should be used only if event represents XML 1.1 content,
     /// because rules for normalizing EOLs for [XML 1.0], [XML 1.1] and [HTML] differs.
@@ -633,10 +658,20 @@ impl<'a> BytesText<'a> {
         self.decoder.content(&self.content, normalize_xml11_eols)
     }
 
-    /// Alias for [`xml11_content()`](Self::xml11_content).
+    /// Decodes the content of the XML event according to the specified version.
+    ///
+    /// When this event produced by the reader, it uses the encoding information
+    /// associated with that reader to interpret the raw bytes contained within
+    /// this text event.
+    ///
+    /// This will allocate if the value is encoded in non-UTF-8 encoding, or EOL normalization
+    /// is required.
     #[inline]
-    pub fn xml_content(&self) -> Result<Cow<'a, str>, EncodingError> {
-        self.xml11_content()
+    pub fn xml_content(&self, version: XmlVersion) -> Result<Cow<'a, str>, EncodingError> {
+        match version {
+            XmlVersion::Explicit1_1 => self.xml11_content(),
+            _ => self.xml10_content(),
+        }
     }
 
     /// Alias for [`xml10_content()`](Self::xml10_content).
@@ -781,7 +816,7 @@ impl<'a> BytesCData<'a> {
     /// ]);
     /// ```
     #[inline]
-    pub fn escaped(content: &'a str) -> CDataIterator<'a> {
+    pub const fn escaped(content: &'a str) -> CDataIterator<'a> {
         CDataIterator {
             inner: utils::CDataIterator::new(content),
         }
@@ -941,10 +976,21 @@ impl<'a> BytesCData<'a> {
         self.decoder.content(&self.content, normalize_xml11_eols)
     }
 
-    /// Alias for [`xml11_content()`](Self::xml11_content).
+    /// Decodes the raw input byte content of the CDATA section of the XML event
+    /// into a string according to the specified version.
+    ///
+    /// When this event produced by the reader, it uses the encoding information
+    /// associated with that reader to interpret the raw bytes contained within
+    /// this CDATA event.
+    ///
+    /// This will allocate if the value in non-UTF-8 encoding, or EOL normalization
+    /// is required.
     #[inline]
-    pub fn xml_content(&self) -> Result<Cow<'a, str>, EncodingError> {
-        self.xml11_content()
+    pub fn xml_content(&self, version: XmlVersion) -> Result<Cow<'a, str>, EncodingError> {
+        match version {
+            XmlVersion::Explicit1_1 => self.xml11_content(),
+            _ => self.xml10_content(),
+        }
     }
 
     /// Alias for [`xml10_content()`](Self::xml10_content).
@@ -1408,6 +1454,71 @@ impl<'a> BytesDecl<'a> {
             .transpose()
     }
 
+    /// Gets XML version as typified enumeration.
+    ///
+    /// According to the [grammar], the version *must* be the first thing in the declaration.
+    /// This method tries to extract the first thing in the declaration and return it.
+    /// In case of multiple attributes value of the first one is returned.
+    ///
+    /// If version is missed in the declaration, or the first thing is not a version,
+    /// [`IllFormedError::MissingDeclVersion`] will be returned.
+    ///
+    /// If version is not 1.0 or 1.1, [`IllFormedError::UnknownVersion`] will be returned.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use quick_xml::XmlVersion;
+    /// use quick_xml::errors::{Error, IllFormedError};
+    /// use quick_xml::events::{BytesDecl, BytesStart};
+    ///
+    /// // <?xml version='1.1'?>
+    /// let decl = BytesDecl::from_start(BytesStart::from_content(" version='1.1'", 0));
+    /// assert_eq!(decl.xml_version().unwrap(), XmlVersion::Explicit1_1);
+    ///
+    /// // <?xml version='1.0' version='1.1'?>
+    /// let decl = BytesDecl::from_start(BytesStart::from_content(" version='1.0' version='1.1'", 0));
+    /// assert_eq!(decl.xml_version().unwrap(), XmlVersion::Explicit1_0);
+    ///
+    /// // <?xml version='1.2'?>
+    /// let decl = BytesDecl::from_start(BytesStart::from_content(" version='1.2'", 0));
+    /// match decl.xml_version() {
+    ///     Err(Error::IllFormed(IllFormedError::UnknownVersion)) => {},
+    ///     _ => assert!(false),
+    /// }
+    ///
+    /// // <?xml encoding='utf-8'?>
+    /// let decl = BytesDecl::from_start(BytesStart::from_content(" encoding='utf-8'", 0));
+    /// match decl.xml_version() {
+    ///     Err(Error::IllFormed(IllFormedError::MissingDeclVersion(Some(key)))) => assert_eq!(key, "encoding"),
+    ///     _ => assert!(false),
+    /// }
+    ///
+    /// // <?xml encoding='utf-8' version='1.1'?>
+    /// let decl = BytesDecl::from_start(BytesStart::from_content(" encoding='utf-8' version='1.1'", 0));
+    /// match decl.xml_version() {
+    ///     Err(Error::IllFormed(IllFormedError::MissingDeclVersion(Some(key)))) => assert_eq!(key, "encoding"),
+    ///     _ => assert!(false),
+    /// }
+    ///
+    /// // <?xml?>
+    /// let decl = BytesDecl::from_start(BytesStart::from_content("", 0));
+    /// match decl.xml_version() {
+    ///     Err(Error::IllFormed(IllFormedError::MissingDeclVersion(None))) => {},
+    ///     _ => assert!(false),
+    /// }
+    /// ```
+    ///
+    /// [grammar]: https://www.w3.org/TR/xml11/#NT-XMLDecl
+    pub fn xml_version(&self) -> Result<XmlVersion, Error> {
+        let v = self.version()?;
+        match v.as_ref() {
+            b"1.0" => Ok(XmlVersion::Explicit1_0),
+            b"1.1" => Ok(XmlVersion::Explicit1_1),
+            _ => Err(Error::IllFormed(IllFormedError::UnknownVersion)),
+        }
+    }
+
     /// Gets the actual encoding using [_get an encoding_](https://encoding.spec.whatwg.org/#concept-encoding-get)
     /// algorithm.
     ///
@@ -1536,8 +1647,7 @@ impl<'a> BytesRef<'a> {
 
     /// Decodes the content of the event.
     ///
-    /// This will allocate if the value contains any escape sequences or in
-    /// non-UTF-8 encoding.
+    /// This will allocate if the value is encoded in non-UTF-8 encoding.
     ///
     /// This method does not normalizes end-of-line characters as required by [specification].
     /// Usually you need [`xml_content()`](Self::xml_content) instead of this method.
@@ -1589,10 +1699,20 @@ impl<'a> BytesRef<'a> {
         self.decoder.content(&self.content, normalize_xml11_eols)
     }
 
-    /// Alias for [`xml11_content()`](Self::xml11_content).
+    /// Decodes the content of the XML event according to the specified version.
+    ///
+    /// When this event produced by the reader, it uses the encoding information
+    /// associated with that reader to interpret the raw bytes contained within
+    /// this general reference event.
+    ///
+    /// This will allocate if the value in non-UTF-8 encoding, or EOL normalization
+    /// is required.
     #[inline]
-    pub fn xml_content(&self) -> Result<Cow<'a, str>, EncodingError> {
-        self.xml11_content()
+    pub fn xml_content(&self, version: XmlVersion) -> Result<Cow<'a, str>, EncodingError> {
+        match version {
+            XmlVersion::Explicit1_1 => self.xml11_content(),
+            _ => self.xml10_content(),
+        }
     }
 
     /// Alias for [`xml10_content()`](Self::xml10_content).

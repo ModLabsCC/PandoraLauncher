@@ -18,7 +18,7 @@ use strum::IntoEnumIterator;
 use crate::{
     component::{error_alert::ErrorAlert, instance_dropdown::InstanceDropdown},
     entity::{
-        DataEntities, instance::InstanceEntry, metadata::{AsMetadataResult, FrontendMetadata, FrontendMetadataResult, FrontendMetadataState}
+        DataEntities, instance::InstanceEntry, metadata::{AsMetadataResult, FrontendMetadata, FrontendMetadataResult}
     },
     root,
 };
@@ -59,7 +59,7 @@ struct InstallDialog {
 }
 
 pub fn open(
-    name: &str,
+    name: SharedString,
     project_id: Arc<str>,
     project_type: ModrinthProjectType,
     install_for: Option<InstanceID>,
@@ -77,27 +77,16 @@ pub fn open(
         cx,
     );
 
-    open_from_entity(SharedString::new(name), project_versions, project_id, project_type, install_for, data.clone(), window, cx);
-}
-
-fn open_from_entity(
-    name: SharedString,
-    project_versions: Entity<FrontendMetadataState>,
-    project_id: Arc<str>,
-    project_type: ModrinthProjectType,
-    install_for: Option<InstanceID>,
-    data: DataEntities,
-    window: &mut Window,
-    cx: &mut App,
-) {
     let title: SharedString = t::instance::content::install::title(&name).into();
 
     let result: FrontendMetadataResult<ModrinthProjectVersionsResult> = project_versions.read(cx).result();
     match result {
         FrontendMetadataResult::Loading => {
-            let _subscription = window.observe(&project_versions, cx, move |project_versions, window, cx| {
+            let data = data.clone();
+            let name = name.clone();
+            let _subscription = window.observe(&project_versions, cx, move |_, window, cx| {
                 window.close_all_dialogs(cx);
-                open_from_entity(name.clone(), project_versions, project_id.clone(), project_type, install_for, data.clone(), window, cx);
+                open(name.clone(), project_id.clone(), project_type, install_for, &data, window, cx);
             });
             window.open_dialog(cx, move |dialog, _, _| {
                 let _ = &_subscription;
@@ -188,7 +177,7 @@ fn open_from_entity(
                     title,
                     name: name.into(),
                     project_versions: valid_project_versions.into(),
-                    data,
+                    data: data.clone(),
                     project_type,
                     project_id,
                     version_matrix,
@@ -250,7 +239,7 @@ fn open_from_entity(
                     title,
                     name: name.into(),
                     project_versions: valid_project_versions.into(),
-                    data,
+                    data: data.clone(),
                     project_type,
                     project_id,
                     version_matrix,
@@ -271,9 +260,24 @@ fn open_from_entity(
                 install_dialog.show(window, cx);
             }
         },
-        FrontendMetadataResult::Error(message) => {
+        FrontendMetadataResult::Error(error, alive) => {
+            let _task = if let Some(alive) = alive {
+                let data = data.clone();
+                let name = name.clone();
+                window.spawn(cx, async move |cx| {
+                    alive.await_notification().await;
+                    _ = cx.update(|window, cx| {
+                        window.close_all_dialogs(cx);
+                        open(name.clone(), project_id.clone(), project_type, install_for, &data, window, cx);
+                    });
+                })
+            } else {
+                Task::ready(())
+            };
+
             window.open_dialog(cx, move |modal, _, _| {
-                modal.title(title.clone()).child(ErrorAlert::new(t::instance::content::requesting_from_modrinth_error().into(), message.clone()))
+                let _ = &_task;
+                modal.title(title.clone()).child(ErrorAlert::new(t::instance::content::requesting_from_error("Modrinth").into(), error.clone()))
             });
         },
     }
@@ -348,6 +352,7 @@ impl InstallDialog {
         let Some(selected_mod_version) = selected_mod_version else {
             return modal.child(content);
         };
+        let selected_mod_version = selected_mod_version.version;
 
         let required_dependencies = selected_mod_version.dependencies.as_ref().map(|deps| {
             let mut required = deps
@@ -366,12 +371,13 @@ impl InstallDialog {
                 let mut existing_projects = FxHashSet::default();
 
                 for existing_content in instance.read(cx).content.values() {
-                    let existing_content = existing_content.read(cx);
-                    for summary in existing_content.iter() {
-                        let ContentSource::ModrinthProject { project_id } = &summary.content_source else {
-                            continue;
-                        };
-                        existing_projects.insert(project_id.clone());
+                    if let Some(existing_content) = existing_content.read(cx) {
+                        for summary in existing_content.iter() {
+                            let ContentSource::ModrinthProject { project_id } = &summary.content_source else {
+                                continue;
+                            };
+                            existing_projects.insert(project_id.clone());
+                        }
                     }
                 };
 
@@ -451,7 +457,7 @@ impl InstallDialog {
 
                     let mut hash = [0u8; 20];
                     let Ok(_) = hex::decode_to_slice(&*install_file.hashes.sha1, &mut hash) else {
-                        let warning = format!("File {} has invalid sha1: {}", install_file.filename, install_file.hashes.sha1);
+                        let warning = t::instance::content::install::file_invalid_sha1(&install_file.filename, &install_file.hashes.sha1);
                         window.push_notification((NotificationType::Error, SharedString::new(warning)), cx);
                         return;
                     };
@@ -508,7 +514,9 @@ impl InstallDialog {
                             .w_full()
                             .gap_0p5()
                             .child(
-                                Select::new(instances).placeholder(t::instance::none_selected()).title_prefix(format!("{}: ", t::instance::label())),
+                                Select::new(instances).placeholder(t::instance::none_selected())
+                                    .title_prefix(format!("{}: ", t::instance::label()))
+                                    .search_placeholder(t::common::search()),
                             )
                             .when(self.unsupported_instances > 0, |content| {
                                 content.child(t::instance::incompatible(self.unsupported_instances))
@@ -578,6 +586,7 @@ impl InstallDialog {
         Select::new(select_state)
             .disabled(self.fixed_minecraft_version.is_some())
             .title_prefix(format!("{}: ", t::instance::game_version()))
+            .search_placeholder(t::common::search())
             .into_any_element()
     }
 
@@ -743,7 +752,9 @@ impl InstallDialog {
             ModrinthProjectType::Other => format!("{}: ", t::instance::content::version::file()),
         };
 
-        Select::new(mod_version_select_state).title_prefix(mod_version_prefix).into_any_element()
+        Select::new(mod_version_select_state).title_prefix(mod_version_prefix)
+            .search_placeholder(t::common::search())
+            .into_any_element()
     }
 }
 
@@ -753,14 +764,20 @@ struct ModVersionItem {
     version: ModrinthProjectVersion,
 }
 
+impl PartialEq for ModVersionItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
 impl SelectItem for ModVersionItem {
-    type Value = ModrinthProjectVersion;
+    type Value = Self;
 
     fn title(&self) -> SharedString {
         self.name.clone()
     }
 
     fn value(&self) -> &Self::Value {
-        &self.version
+        self
     }
 }

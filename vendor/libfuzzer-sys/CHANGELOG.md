@@ -28,6 +28,18 @@ Released YYYY-MM-DD.
 
 --------------------------------------------------------------------------------
 
+## 0.4.13
+
+Released 2026-06-04.
+
+### Changed
+
+* Updated docs for the `fuzz_mutator!` macro to link to [the `mutatis`
+  crate](https://docs.rs/mutatis), which is a helpful crate when writing complex
+  custom mutators.
+
+--------------------------------------------------------------------------------
+
 ## 0.4.12
 
 Released 2026-02-10.

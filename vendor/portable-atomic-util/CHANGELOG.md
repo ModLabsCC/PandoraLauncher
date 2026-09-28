@@ -12,6 +12,14 @@ Note: In this file, do not use the hard wrap in the middle of a sentence for com
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-04-16
+
+- Implement serde serialization and deserialization for `Arc`, gated behind "serde" feature. ([#2](https://github.com/taiki-e/portable-atomic-util/pull/2), thanks @tommasoclini)
+
+## [0.2.6] - 2026-03-14
+
+portable-atomic-util has been extracted from the portable-atomic repository into its own repository: <https://github.com/taiki-e/portable-atomic-util>
+
 ## [0.2.5] - 2026-01-31
 
 - Add `Arc::{new_zeroed,new_zeroed_slice}` at Rust 1.36+. (align to the [std `Arc` change in Rust 1.92](https://github.com/rust-lang/rust/pull/144091)) ([f8affb6](https://github.com/taiki-e/portable-atomic/commit/f8affb661abb1ac928cd78a66bf8fe1e72c42e42), [ae5aba7](https://github.com/taiki-e/portable-atomic/commit/ae5aba7cbe182b5d83b4b4973ccdaab372bef4d6))
@@ -112,16 +120,18 @@ Note: In this file, do not use the hard wrap in the middle of a sentence for com
 
 Initial release
 
-[Unreleased]: https://github.com/taiki-e/portable-atomic/compare/portable-atomic-util-0.2.5...HEAD
-[0.2.5]: https://github.com/taiki-e/portable-atomic/compare/portable-atomic-util-0.2.4...portable-atomic-util-0.2.5
-[0.2.4]: https://github.com/taiki-e/portable-atomic/compare/portable-atomic-util-0.2.3...portable-atomic-util-0.2.4
-[0.2.3]: https://github.com/taiki-e/portable-atomic/compare/portable-atomic-util-0.2.2...portable-atomic-util-0.2.3
-[0.2.2]: https://github.com/taiki-e/portable-atomic/compare/portable-atomic-util-0.2.1...portable-atomic-util-0.2.2
-[0.2.1]: https://github.com/taiki-e/portable-atomic/compare/portable-atomic-util-0.2.0...portable-atomic-util-0.2.1
-[0.2.0]: https://github.com/taiki-e/portable-atomic/compare/portable-atomic-util-0.1.5...portable-atomic-util-0.2.0
-[0.1.5]: https://github.com/taiki-e/portable-atomic/compare/portable-atomic-util-0.1.4...portable-atomic-util-0.1.5
-[0.1.4]: https://github.com/taiki-e/portable-atomic/compare/portable-atomic-util-0.1.3...portable-atomic-util-0.1.4
-[0.1.3]: https://github.com/taiki-e/portable-atomic/compare/portable-atomic-util-0.1.2...portable-atomic-util-0.1.3
-[0.1.2]: https://github.com/taiki-e/portable-atomic/compare/portable-atomic-util-0.1.1...portable-atomic-util-0.1.2
-[0.1.1]: https://github.com/taiki-e/portable-atomic/compare/portable-atomic-util-0.1.0...portable-atomic-util-0.1.1
-[0.1.0]: https://github.com/taiki-e/portable-atomic/releases/tag/portable-atomic-util-0.1.0
+[Unreleased]: https://github.com/taiki-e/portable-atomic-util/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/taiki-e/portable-atomic-util/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/taiki-e/portable-atomic-util/compare/v0.2.5...v0.2.6
+[0.2.5]: https://github.com/taiki-e/portable-atomic-util/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/taiki-e/portable-atomic-util/compare/v0.2.3...v0.2.4
+[0.2.3]: https://github.com/taiki-e/portable-atomic-util/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/taiki-e/portable-atomic-util/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/taiki-e/portable-atomic-util/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/taiki-e/portable-atomic-util/compare/v0.1.5...v0.2.0
+[0.1.5]: https://github.com/taiki-e/portable-atomic-util/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/taiki-e/portable-atomic-util/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/taiki-e/portable-atomic-util/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/taiki-e/portable-atomic-util/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/taiki-e/portable-atomic-util/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/taiki-e/portable-atomic-util/releases/tag/v0.1.0

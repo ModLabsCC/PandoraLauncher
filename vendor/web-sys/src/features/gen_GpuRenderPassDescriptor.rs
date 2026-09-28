@@ -5,7 +5,7 @@ use wasm_bindgen::prelude::*;
 #[cfg(web_sys_unstable_apis)]
 #[wasm_bindgen]
 extern "C" {
-    # [wasm_bindgen (extends = :: js_sys :: Object , js_name = GPURenderPassDescriptor)]
+    #[wasm_bindgen(extends = "::js_sys::Object", js_name = "GPURenderPassDescriptor")]
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[doc = "The `GpuRenderPassDescriptor` dictionary."]
     #[doc = ""]
@@ -43,7 +43,7 @@ extern "C" {
     #[wasm_bindgen(method, getter = "colorAttachments")]
     pub fn get_color_attachments(
         this: &GpuRenderPassDescriptor,
-    ) -> ::js_sys::Array<::js_sys::JsOption<GpuRenderPassColorAttachment>>;
+    ) -> ::js_sys::Array<::js_sys::JsNullable<GpuRenderPassColorAttachment>>;
     #[cfg(web_sys_unstable_apis)]
     #[cfg(feature = "GpuRenderPassColorAttachment")]
     #[doc = "Change the `colorAttachments` field of this object."]
@@ -55,7 +55,7 @@ extern "C" {
     #[wasm_bindgen(method, setter = "colorAttachments")]
     pub fn set_color_attachments(
         this: &GpuRenderPassDescriptor,
-        val: &[::js_sys::JsOption<GpuRenderPassColorAttachment>],
+        val: &[::js_sys::JsNullable<GpuRenderPassColorAttachment>],
     );
     #[cfg(web_sys_unstable_apis)]
     #[cfg(feature = "GpuRenderPassDepthStencilAttachment")]
@@ -161,7 +161,7 @@ impl GpuRenderPassDescriptor {
     #[doc = ""]
     #[doc = "*This API is unstable and requires `--cfg=web_sys_unstable_apis` to be activated, as"]
     #[doc = "[described in the `wasm-bindgen` guide](https://wasm-bindgen.github.io/wasm-bindgen/web-sys/unstable-apis.html)*"]
-    pub fn new(color_attachments: &[::js_sys::JsOption<GpuRenderPassColorAttachment>]) -> Self {
+    pub fn new(color_attachments: &[::js_sys::JsNullable<GpuRenderPassColorAttachment>]) -> Self {
         #[allow(unused_mut)]
         let mut ret: Self = ::wasm_bindgen::JsCast::unchecked_into(::js_sys::Object::new());
         ret.set_color_attachments(color_attachments);
@@ -178,7 +178,7 @@ impl GpuRenderPassDescriptor {
     #[deprecated = "Use `set_color_attachments()` instead."]
     pub fn color_attachments(
         &mut self,
-        val: &[::js_sys::JsOption<GpuRenderPassColorAttachment>],
+        val: &[::js_sys::JsNullable<GpuRenderPassColorAttachment>],
     ) -> &mut Self {
         self.set_color_attachments(val);
         self

@@ -230,11 +230,13 @@ pub(crate) struct Lexer {
     inside_token: bool,
     eof_handled: bool,
     reparse_depth: u8,
+    last_was_cr: bool,
     #[cfg(test)]
     skip_errors: bool,
 
     max_entity_expansion_depth: u8,
     max_entity_expansion_length: usize,
+    pub(crate) ignore_end_of_stream: bool,
 }
 
 impl Position for Lexer {
@@ -247,7 +249,7 @@ impl Lexer {
     /// Returns a new lexer with default state.
     pub(crate) fn new(config: &ParserConfig) -> Self {
         Self {
-            reader: CharReader::new(),
+            reader: CharReader::new(Encoding::Unknown),
             pos: TextPosition::new(),
             head_pos: TextPosition::new(),
             char_queue: VecDeque::with_capacity(4), // TODO: check size
@@ -256,11 +258,13 @@ impl Lexer {
             inside_token: false,
             eof_handled: false,
             reparse_depth: 0,
+            last_was_cr: false,
             #[cfg(test)]
             skip_errors: false,
 
             max_entity_expansion_depth: config.max_entity_expansion_depth,
             max_entity_expansion_length: config.max_entity_expansion_length,
+            ignore_end_of_stream: config.ignore_end_of_stream,
         }
     }
 
@@ -278,7 +282,9 @@ impl Lexer {
 
     /// Reset the eof handled flag of the lexer.
     #[inline]
-    pub fn reset_eof_handled(&mut self) { self.eof_handled = false; }
+    pub fn reset_eof_handled(&mut self) {
+        self.eof_handled = false;
+    }
 
     /// Tries to read the next token from the buffer.
     ///
@@ -309,7 +315,17 @@ impl Lexer {
         }
         // if char_queue is empty, all circular reparsing is done
         self.reparse_depth = 0;
-        while let Some(c) = self.reader.next_char_from(b)? {
+        while let Some(mut c) = self.reader.next_char_from(b)? {
+            if self.last_was_cr && c == '\n' {
+                self.last_was_cr = false;
+                continue;
+            }
+            self.last_was_cr = false;
+            if c == '\r' {
+                self.last_was_cr = true;
+                c = '\n';
+            }
+
             if c == '\n' {
                 self.head_pos.new_line();
             } else {
@@ -331,24 +347,17 @@ impl Lexer {
         self.eof_handled = true;
         self.pos = self.head_pos;
         match self.st {
-            State::InsideCdata | State::CDataClosing(_) => Err(self.error(SyntaxError::UnclosedCdata)),
+            State::InsideCdata | State::CDataClosing(_) if !self.ignore_end_of_stream =>
+                Err(self.error(SyntaxError::UnclosedCdata)),
+            State::InsideCdata | State::CDataClosing(_) |
             State::TagStarted | State::CommentOrCDataOrDoctypeStarted |
             State::CommentStarted | State::CDataStarted(_)| State::DoctypeStarted(_) |
-            State::CommentClosing(ClosingSubstate::Second) |
+            State::CommentClosing(_) |
             State::InsideComment | State::InsideMarkupDeclaration |
             State::InsideProcessingInstruction | State::ProcessingInstructionClosing |
-            State::InsideDoctype | State::InsideMarkupDeclarationQuotedString(_) =>
+            State::InsideDoctype | State::InsideMarkupDeclarationQuotedString(_) |
+            State::EmptyTagClosing | State::InvalidCDataClosing(_) =>
                 Err(self.error(SyntaxError::UnexpectedEof)),
-            State::EmptyTagClosing =>
-                Ok(Token::Character('/')),
-            State::CommentClosing(ClosingSubstate::First) =>
-                Ok(Token::Character('-')),
-            State::InvalidCDataClosing(ClosingSubstate::First) =>
-                Ok(Token::Character(']')),
-            State::InvalidCDataClosing(ClosingSubstate::Second) => {
-                self.eof_handled = false;
-                Ok(self.move_to_with_unread(State::Normal, &[']'], Token::Character(']')))
-            },
             State::Normal => Ok(Token::Eof),
         }
     }
@@ -418,7 +427,7 @@ impl Lexer {
             return Err(self.error(SyntaxError::EntityTooBig));
         }
 
-        self.eof_handled = false;
+        self.reset_eof_handled();
         self.char_queue.reserve(markup.len());
         for c in markup.chars().rev() {
             self.char_queue.push_front(c);
@@ -651,7 +660,8 @@ mod tests {
     macro_rules! assert_oks(
         (for $lex:ident and $buf:ident ; $($e:expr)+) => ({
             $(
-                assert_eq!(Ok($e), $lex.next_token(&mut $buf));
+                let tmp = $e;
+                assert_eq!(Ok(tmp), $lex.next_token(&mut $buf), "expected '{}'", tmp);
              )+
         })
     );
@@ -661,8 +671,8 @@ mod tests {
             let err = $lex.next_token(&mut $buf);
             assert!(err.is_err());
             let err = err.unwrap_err();
-            assert_eq!($r as u64, err.position().row);
-            assert_eq!($c as u64, err.position().column);
+            assert_eq!($r, err.position().row);
+            assert_eq!($c, err.position().column);
         })
     );
 
@@ -783,7 +793,7 @@ mod tests {
     #[test]
     fn special_chars_test() {
         let (mut lex, mut buf) = make_lex_and_buf(
-            r"?x!+ // -| ]z]]"
+            r"?x!+ // -| ]z]] "
         );
 
         assert_oks!(for lex and buf ;
@@ -802,6 +812,7 @@ mod tests {
             Token::Character('z')
             Token::Character(']')
             Token::Character(']')
+            Token::Character(' ')
         );
         assert_none!(for lex and buf);
     }
@@ -1009,11 +1020,7 @@ mod tests {
             })
         );
         eof_check!("?"  ; Token::Character('?'));
-        eof_check!("/"  ; Token::Character('/'));
         eof_check!("-"  ; Token::Character('-'));
-        eof_check!("]"  ; Token::Character(']'));
-        eof_check!("]"  ; Token::Character(']'));
-        eof_check!("]"  ; Token::Character(']'));
     }
 
     #[test]
@@ -1027,6 +1034,8 @@ mod tests {
         );
         eof_check!("<"        ; 0, 1);
         eof_check!("<!"       ; 0, 2);
+        eof_check!("/"        ; 0, 1);
+        eof_check!("]"        ; 0, 1);
         eof_check!("<!-"      ; 0, 3);
         eof_check!("<!["      ; 0, 3);
         eof_check!("<![C"     ; 0, 4);
